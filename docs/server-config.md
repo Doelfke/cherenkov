@@ -47,9 +47,8 @@ the generation. Reload without a startup config file returns an error.
 `--repack` is a one-time startup action and is never repeated by reload.
 
 Sampling, effort, independently sized resident sequences, retained session
-IDs and concurrent generation are still proposed in
-[the serving design](serving-design.md). Their configuration fields are
-rejected until implemented. The current engine runs one generation at a
+IDs and concurrent generation are not implemented. Their configuration
+fields are rejected. The current engine runs one generation at a
 time; the queue/readers settings do not increase active sequence count.
 
 ## Memory and expert policy

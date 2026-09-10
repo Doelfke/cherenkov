@@ -459,5 +459,5 @@ impl<'a> Gpu<'a> {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/qwen4_exp/prefill.rs"]
+#[path = "../../../tests/unit/qwen4_exp/gpu/prefill.rs"]
 mod tests;

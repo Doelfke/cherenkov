@@ -2,7 +2,7 @@
 
 36 valid samples. Medians below exclude loading and conversion.
 
-| Prompt tokens | Expert bits | Before PP/s | After PP/s | Change | Pairs |
+| Prompt tokens | Expert bits | Before pp/s | After pp/s | Change | Pairs |
 | ---: | ---: | ---: | ---: | ---: | ---: |
 | 121 | 4 | 11.3 | 11.9 | +5.8% | 2 |
 | 121 | 3 | 8.9 | 14.8 | +65.7% | 2 |
@@ -30,8 +30,9 @@ Q4 compute is unchanged; its timing differences are control variation, not an
 intended optimization.
 All 36 samples were on AC at both checks, built no stores, and reported 20.98 GB
 Metal after prefill scratch release. This is not a transient peak measurement.
-The after binary is preserved at binaries.after.archived_path; the exact
-benchmark source is source_commit plus source_diff.
+Binary hashes and the development source commit/diff are recorded in the
+report. Archived executable paths refer to the original measurement machine;
+the executables and development history are not included in this repository.
 
 ## Output checks
 
@@ -46,5 +47,4 @@ Binary hashes, phase timings, source snapshot, and power readings are in
 [report.json](report.json).
 
 Machine-specific model and executable paths in the saved reports have been
-normalized to placeholders. Measurements are unchanged; original paths remain
-in Git history.
+normalized to placeholders. Measurements and generated answers are unchanged.

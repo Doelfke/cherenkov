@@ -330,7 +330,8 @@ fn progress(report: &Value) -> Result<String> {
 }
 
 fn gallery(report: &Value, rows: &[Value]) -> Result<String> {
-    let mut page = include_str!("gallery.html").replace("{{progress}}", &progress(report)?);
+    let mut page =
+        include_str!("../templates/gallery.html").replace("{{progress}}", &progress(report)?);
     let tables = table(report, rows, "decode", "tg_s", "Generation: tokens/s")?
         + &table(
             report,

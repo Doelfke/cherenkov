@@ -184,6 +184,7 @@ once from Q4 and reused; no quantization happens in the decode loop.
 See the [engine guide](docs/engine.md) for the address-table layout and
 synchronization. Direct file-backed expert residency is a separate developer
 option; the default uses the shared pool described above.
+The [documentation index](docs/README.md) maps the remaining guides and source.
 
 ## License
 

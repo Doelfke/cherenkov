@@ -32,12 +32,10 @@ setting uses both 2-bit misses and the timing-dependent `--cut-weak 0.08`;
 it is not a measurement of precision alone. The suite does not use CPU
 oracle checks, server prefix caching, or developer environment overrides.
 
-Measurements stay on a saved copy of the original release executable
-while cleanup edits are prepared. Its SHA-256 is
+All measurements used the same saved executable. Its SHA-256 is
 `d54f24aae702db7ea21745387555c79399c588478ec592c12a58788866f865de`.
-The recorded source hash was checked against the files in the commit
-above. The initial dirty status reflects an untracked `.clangd`, outside
-the compiled source.
+The recorded source hash was checked against the development commit above.
+That commit and executable are not distributed in this standalone repository.
 
 ## Conversion and capped attempts
 
@@ -70,7 +68,7 @@ retained per sample in `report.json`.
 
 These are completion workloads, not equal-length throughput tests or a
 model-accuracy score. Faster token generation can produce a longer
-answer, so compare decode seconds and output length alongside TG/s.
+answer, so compare decode seconds and output length alongside tg/s.
 Power samples and clock probes are retained to expose power changes and
 the fanless machine's sustained-load behavior. Reported Metal allocation
 is taken after prefill scratch is released, not a measurement of its peak.
@@ -88,5 +86,4 @@ These are manual observations on individual answers, not a comprehensive
 correctness evaluation. All text and extracted SVGs are kept unedited.
 
 Machine-specific model and executable paths in the saved reports have been
-normalized to placeholders. Measurements are unchanged; original paths remain
-in Git history.
+normalized to placeholders. Measurements and generated answers are unchanged.

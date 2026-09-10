@@ -85,10 +85,6 @@ close argmax decisions. The checkpoint itself restores state byte for
 byte. [Server validation](validation.md) includes live API,
 prefix reuse, and state-restoration checks.
 
-The [serving design](serving-design.md) describes further work on
-sampling, native reasoning controls, retained conversations and concurrent
-generation; those features are not yet implemented.
-
 ## Expert precision and speculation
 
 Default: **4-bit experts, two adaptive MTP drafts, no deadline cut**.
