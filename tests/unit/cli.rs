@@ -17,6 +17,7 @@ fn pack_accepts_default_single_and_multiple_precisions() {
         else {
             panic!("pack expected")
         };
+
         assert_eq!(experts, expected);
         assert_eq!(model_dir, Some(PathBuf::from("/model")));
     }
@@ -27,6 +28,7 @@ fn pack_rejects_invalid_or_missing_precisions() {
     for value in ["1", "5", "2,5", "all", "-2", ""] {
         assert!(Cli::try_parse_from(["cherenkov", "pack", "--experts", value]).is_err());
     }
+
     assert!(Cli::try_parse_from(["cherenkov", "pack", "--experts"]).is_err());
 }
 
@@ -47,6 +49,7 @@ fn server_cli_records_only_explicit_overrides() {
     };
     let root = tempfile::tempdir().unwrap();
     let source = args.source(Some(root.path().to_owned())).unwrap();
+
     assert_eq!(source.overrides.max_tokens, Some(64));
     assert_eq!(source.overrides.experts, None);
     assert_eq!(source.overrides.no_eos, None);
@@ -94,6 +97,7 @@ fn server_overrides_preserve_explicit_zero_false_and_adaptive() {
         .source(Some(tempfile::tempdir().unwrap().path().to_owned()))
         .unwrap()
         .overrides;
+
     assert_eq!(overrides.experts, Some(4));
     assert_eq!(overrides.cut_weak, Some(0.0));
     assert_eq!(overrides.drafts, Some(0));
@@ -102,10 +106,12 @@ fn server_overrides_preserve_explicit_zero_false_and_adaptive() {
         Some(cherenkov::options::PoolBudget::Adaptive)
     );
     assert_eq!(overrides.no_eos, Some(false));
+
     let cli = Cli::try_parse_from(["cherenkov", "serve", "--no-eos"]).unwrap();
     let Some(Command::Serve(args)) = cli.command else {
         panic!("serve expected")
     };
+
     assert_eq!(
         args.source(Some(tempfile::tempdir().unwrap().path().to_owned()))
             .unwrap()
@@ -135,11 +141,13 @@ fn server_rejects_cli_only_options_and_invalid_numbers() {
 #[test]
 fn portable_root_and_default_config_work_without_a_model_argument() {
     let dir = tempfile::tempdir().unwrap();
+
     std::fs::write(
         dir.path().join("cherenkov.toml"),
         "[defaults]\nmax_tokens=128",
     )
     .unwrap();
+
     let cli = Cli::try_parse_from([
         "cherenkov",
         "serve",
@@ -153,12 +161,14 @@ fn portable_root_and_default_config_work_without_a_model_argument() {
     };
     let source = args.source(cli.root).unwrap();
     let config = source.resolve().unwrap();
+
     assert_eq!(config.defaults.max_tokens, 128);
     assert_eq!(config.server.root.as_deref(), Some(dir.path()));
     assert_eq!(
         config.model_dir().unwrap(),
         Paths::new(Some(dir.path())).unwrap().default_model()
     );
+
     for args in [
         vec!["paths"],
         vec!["download", "--metadata-only"],

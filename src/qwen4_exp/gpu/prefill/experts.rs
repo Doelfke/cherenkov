@@ -40,33 +40,41 @@ impl Gpu<'_> {
         let wts = self.read_f32(&pf.topk_w, t * k);
         // Rows per expert, in expert order.
         let mut lists: Vec<Vec<(u32, f32)>> = vec![Vec::new(); c.num_experts];
+
         for r in 0..t {
             for j in 0..k {
                 lists[idx[r * k + j] as usize].push((r as u32, wts[r * k + j]));
             }
         }
+
         // The set keeps this layer's most-used experts (its share of the
         // budget); everything else streams through the ring.
         let budget = self.res.budget() / n_record_layers;
         let mut by_use: Vec<usize> = (0..c.num_experts)
             .filter(|&e| !lists[e].is_empty())
             .collect();
+
         by_use.sort_by_key(|&e| std::cmp::Reverse(lists[e].len()));
+
         let keep: std::collections::HashSet<usize> = by_use.iter().take(budget).copied().collect();
         let mut csr_rows: Vec<u32> = Vec::with_capacity(t * k);
         let mut csr_w: Vec<f32> = Vec::with_capacity(t * k);
         let mut jobs: Vec<ExpertJob> = Vec::new();
         self.step_no += 1;
         let mut ring_pos = 0usize;
+
         for (e, list) in lists.iter().enumerate() {
             if list.is_empty() {
                 continue;
             }
+
             let csr_offset = csr_rows.len();
+
             for &(r, w) in list {
                 csr_rows.push(r);
                 csr_w.push(w);
             }
+
             let rid = self.record_id(record_layer, e as u32);
             // Preserve a resident record's precision. New kept records
             // use the pool's default; transient misses use --miss-experts.
@@ -76,6 +84,7 @@ impl Gpu<'_> {
                     .acquire(&self.ctx, &[rid], self.step_no)?
                     .is_empty();
                 let (buf, record_offset) = self.res.buf(&self.ctx, rid)?;
+
                 ExpertSource::Pool {
                     rid,
                     buf,
@@ -85,12 +94,14 @@ impl Gpu<'_> {
             } else {
                 let slot = (ring_pos % RING) as u32;
                 ring_pos += 1;
+
                 ExpertSource::Ring(slot)
             };
             let layout = match &source {
                 ExpertSource::Pool { .. } if self.res.kind(rid) == 0 => base_layout,
                 _ => miss_layout,
             };
+
             jobs.push(ExpertJob {
                 layout,
                 expert: e,
@@ -99,6 +110,7 @@ impl Gpu<'_> {
                 source,
             });
         }
+
         unsafe {
             std::ptr::copy_nonoverlapping(
                 csr_rows.as_ptr(),
@@ -111,6 +123,7 @@ impl Gpu<'_> {
                 csr_w.len(),
             );
         }
+
         Ok(jobs)
     }
 
@@ -146,8 +159,10 @@ impl Gpu<'_> {
 
         let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
         let mut enc = cb.computeCommandEncoder().context("encoder")?;
+
         // Shared expert over all rows, into a zeroed block output.
         self.zero(&enc, &pf.moe_out, t as u32 * h);
+
         if !self.skips("shared") {
             self.qmm(&enc, &moe.sg, &pf.mixed, &pf.ge, t);
             self.qmm(&enc, &moe.su, &pf.mixed, &pf.ue, t);
@@ -179,11 +194,14 @@ impl Gpu<'_> {
                 true,
             );
         }
+
         if !self.skips("experts") {
             for (bi, batch) in jobs.chunks(GROUP).enumerate() {
                 enc.endEncoding();
                 cb.encodeWaitForEvent_value(event_cpu, cbase + bi as u64 + 1);
+
                 enc = cb.computeCommandEncoder().context("encoder")?;
+
                 for job in batch {
                     let (csr_offset, n) = (job.csr_offset, job.row_count);
                     let nu = n as u32;
@@ -193,6 +211,7 @@ impl Gpu<'_> {
                         } => (buf, *record_offset),
                         ExpertSource::Ring(slot) => (&self.ring, *slot as usize * stride),
                     };
+
                     self.dispatch(
                         &enc,
                         &self.pipes.gather_rows,
@@ -207,6 +226,7 @@ impl Gpu<'_> {
                         256,
                         false,
                     );
+
                     let l = job.layout;
                     let gate = Q {
                         w: l.gate_w,
@@ -229,6 +249,7 @@ impl Gpu<'_> {
                         out: h,
                         inp: inter,
                     };
+
                     self.expert_qmm_from(&enc, wb, &gate.at_offset(rec), &pf.xg, &pf.ge, n, l.bits);
                     self.expert_qmm_from(&enc, wb, &up.at_offset(rec), &pf.xg, &pf.ue, n, l.bits);
                     self.dispatch(
@@ -260,11 +281,14 @@ impl Gpu<'_> {
                         false,
                     );
                 }
+
                 enc.endEncoding();
                 cb.encodeSignalEvent_value(event, base + bi as u64 + 1);
+
                 enc = cb.computeCommandEncoder().context("encoder")?;
             }
         }
+
         enc.endEncoding();
         cb.commit();
 
@@ -273,17 +297,21 @@ impl Gpu<'_> {
         let mut fetched_bytes = 0usize;
         let mut wait_s = 0.0f64;
         let ring_base = self.ring.contents().cast::<u8>().as_ptr() as usize;
+
         for (bi, batch) in jobs.chunks(GROUP).enumerate() {
             if bi >= RING / GROUP {
                 // The ring slots this batch overwrites were last used at
                 // most RING/GROUP batches ago; the GPU must be done there.
                 let need = base + (bi - RING / GROUP) as u64 + 1;
                 let t0 = std::time::Instant::now();
+
                 while self.event.signaledValue() < need {
                     std::hint::spin_loop();
                 }
+
                 wait_s += t0.elapsed().as_secs_f64();
             }
+
             let (records, bytes) = self.read_expert_batch(
                 moe.record_layer,
                 batch,
@@ -293,9 +321,12 @@ impl Gpu<'_> {
             )?;
             fetched += records;
             fetched_bytes += bytes;
+
             self.event_cpu.setSignaledValue(cbase + bi as u64 + 1);
         }
+
         cb.waitUntilCompleted();
+
         Ok((
             fetched,
             fetched_bytes,
@@ -314,6 +345,7 @@ impl Gpu<'_> {
         miss_kind: u8,
     ) -> Result<(usize, usize)> {
         let (mut to_set, mut ring4, mut ring_low) = (Vec::new(), Vec::new(), Vec::new());
+
         for job in batch {
             match &job.source {
                 ExpertSource::Pool {
@@ -325,6 +357,7 @@ impl Gpu<'_> {
                     } else {
                         &mut ring_low
                     };
+
                     reads.push((
                         ring_base + *slot as usize * stride,
                         self.record_id(record_layer, job.expert as u32) * job.layout.stride,
@@ -334,22 +367,29 @@ impl Gpu<'_> {
                 _ => {}
             }
         }
+
         let fetched = to_set.len() + ring4.len() + ring_low.len();
         let fetched_bytes = batch
             .iter()
             .filter(|job| !matches!(job.source, ExpertSource::Pool { fetch: false, .. }))
             .map(|job| job.layout.stride)
             .sum::<usize>();
+
         if !self.fake_experts {
             let (plan, _) = self.res.plan_reads(&to_set);
+
             plan.run(&self.pool_file, &self.pool_file_nocache);
             residency::fetch_into_slots(&self.pool_file_nocache, &ring4);
+
             if !ring_low.is_empty() {
                 let file = self.res.store_file(&self.pool_file_nocache, miss_kind);
+
                 residency::fetch_into_slots(file, &ring_low);
             }
         }
+
         self.res.finish(&self.ctx, &to_set)?;
+
         Ok((fetched, fetched_bytes))
     }
 }

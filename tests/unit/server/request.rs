@@ -11,6 +11,7 @@ fn session_input_keeps_history_and_settings_without_rewriting_json() {
         json!({"temperature": 0.7, "top_k": 20, "context_tokens": 64}),
     );
     let first = message(&id, "Hello");
+
     begin_turn(&store, &first, "first")
         .prepare("Hi", None)
         .unwrap()
@@ -29,6 +30,7 @@ fn session_input_keeps_history_and_settings_without_rewriting_json() {
         ..Defaults::default()
     };
     let request = parse_request(&body, ApiKind::Chat, &defaults, Some(&turn.input)).unwrap();
+
     assert_eq!(body, original);
     assert_eq!(request.sampling.temperature, 0.7);
     assert_eq!(request.sampling.top_k, 3);
@@ -61,8 +63,10 @@ fn request_values_override_reloadable_defaults() {
         None,
     )
     .unwrap();
+
     assert_eq!(r.max_tokens, 128);
     assert!(r.stream && r.include_usage);
+
     let r = parse_request(
         &json!({
             "prompt": "hello",
@@ -75,6 +79,7 @@ fn request_values_override_reloadable_defaults() {
         None,
     )
     .unwrap();
+
     assert_eq!(r.max_tokens, 7);
     assert!(!r.stream && !r.include_usage);
 }
@@ -91,6 +96,7 @@ fn chat_template_preserves_roles_and_defaults() {
         "max_completion_tokens": 17,
     });
     let r = parse_request(&body, ApiKind::Chat, &Defaults::default(), None).unwrap();
+
     assert_eq!(
         r.prompt.text,
         "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
@@ -131,6 +137,7 @@ fn reject_unsupported_generation_instead_of_ignoring_it() {
         json!({"response_format":{"type":"json_object"}}),
     ] {
         let mut request = json!({"prompt":"test"});
+
         request
             .as_object_mut()
             .unwrap()
@@ -140,6 +147,7 @@ fn reject_unsupported_generation_instead_of_ignoring_it() {
             "{request}"
         );
     }
+
     assert!(
         parse_request(
             &json!({"messages":[]}),
@@ -164,6 +172,7 @@ fn preparation_tokenizer() -> ChatTokenizer {
     use tokenizers::{
         Tokenizer, models::wordlevel::WordLevel, pre_tokenizers::whitespace::Whitespace,
     };
+
     let model = WordLevel::builder()
         .vocab(
             [("[UNK]", 0), ("hello", 1), ("world", 2), ("last", 3)]
@@ -175,7 +184,9 @@ fn preparation_tokenizer() -> ChatTokenizer {
         .build()
         .unwrap();
     let mut inner = Tokenizer::new(model);
+
     inner.with_pre_tokenizer(Some(Whitespace));
+
     ChatTokenizer {
         inner,
         template: Some(crate::prompt::fixture_template()),
@@ -204,6 +215,7 @@ fn preparation_keeps_validated_tokens_prefix_boundaries_and_eos_policy() {
     // The incomplete word retokenizes differently: only the first token matches.
     request.prompt.boundaries = ["hello wor".len(), "hello world".len()];
     let prepared = request.prepare(&tok, &options, 2).unwrap();
+
     assert_eq!(prepared.ids, vec![1, 2, 3]);
     // One matching token is held back for MTP's following-token dependency.
     assert_eq!(prepared.boundaries, vec![0, 2]);
@@ -215,6 +227,7 @@ fn preparation_keeps_validated_tokens_prefix_boundaries_and_eos_policy() {
 #[test]
 fn preparation_rejects_empty_prompts_and_output_or_context_overflow() {
     let tok = preparation_tokenizer();
+
     for (prompt, output_limit, context, expected) in [
         ("", 2, 7, "at least one token"),
         ("hello world last", 1, 7, "output policy"),
@@ -232,6 +245,7 @@ fn preparation_rejects_empty_prompts_and_output_or_context_overflow() {
             ..Options::default()
         };
         let error = request.prepare(&tok, &options, output_limit).err().unwrap();
+
         assert!(error.to_string().contains(expected), "{error}");
     }
 }
@@ -240,9 +254,11 @@ fn preparation_rejects_empty_prompts_and_output_or_context_overflow() {
 fn shared_chat_prefix_keeps_mtps_following_token_stable() {
     let Some(model) = std::env::var_os("CHERENKOV_MODEL_DIR") else {
         eprintln!("set CHERENKOV_MODEL_DIR to verify chat prefix token boundaries");
+
         return;
     };
     let tok = ChatTokenizer::load(std::path::Path::new(&model)).unwrap();
+
     for drafts in [0, 2] {
         let options = Options {
             drafts,
@@ -258,6 +274,7 @@ fn shared_chat_prefix_keeps_mtps_following_token_stable() {
                     ],
                     "max_tokens": 2,
                 });
+
                 super::parse_request(
                     &body,
                     ApiKind::Chat,
@@ -271,9 +288,12 @@ fn shared_chat_prefix_keeps_mtps_following_token_stable() {
             })
             .collect();
         let end = prepared[0].boundaries[0];
+
         assert!(end > 0);
         assert_eq!(end, prepared[1].boundaries[0]);
+
         let following = usize::from(drafts > 0);
+
         assert_eq!(
             prepared[0].ids[..end + following],
             prepared[1].ids[..end + following]

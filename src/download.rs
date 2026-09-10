@@ -40,18 +40,24 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
     paths.model(request.repo, storage::DEFAULT_REVISION)?;
     storage::create_private_dir(&paths.data)?;
     storage::create_private_dir(&paths.scratch)?;
+
     let lock = std::fs::File::options()
         .create(true)
         .truncate(false)
         .write(true)
         .open(paths.data.join("download.lock"))?;
+
     lock.try_lock()
         .context("another download is using this root")?;
+
     let mut builder = HFClient::builder().cache_dir(paths.downloads());
+
     if let Some(token) = request.token {
         ensure!(!token.trim().is_empty(), "HF token must not be empty");
+
         builder = builder.token(token);
     }
+
     let client = HFClientSync::from_inner(builder.build()?)?;
     let (owner, name) = hf_hub::split_id(request.repo);
     let repo = client.model(owner, name);
@@ -67,26 +73,31 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
             _ => None,
         })
         .collect();
+
     ensure!(
         available.contains_key("config.json") && available.contains_key("tokenizer.json"),
         "checkpoint needs config.json and tokenizer.json"
     );
+
     let mut files: BTreeSet<String> = METADATA
         .iter()
         .filter(|f| available.contains_key(**f))
         .map(|s| (*s).into())
         .collect();
+
     eprintln!(
         "downloading {} at {commit} into {}",
         request.repo,
         model.display()
     );
+
     for name in &files {
         ensure!(
             available[name] <= 64 * BYTES_PER_MIB as u64,
             "metadata file {name} exceeds 64 MiB"
         );
     }
+
     storage::require_space(&paths.data, missing_bytes(&files, &available, &snapshot)?)?;
     // Validate the architecture before fetching tokenizer or weight payloads.
     repo.download_file()
@@ -94,6 +105,7 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
         .revision(&commit)
         .send()?;
     Qwen4ExpConfig::load(&snapshot)?;
+
     if !request.metadata_only {
         if available.contains_key("model.safetensors.index.json") {
             let index = repo
@@ -101,12 +113,15 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
                 .filename("model.safetensors.index.json")
                 .revision(&commit)
                 .send()?;
+
             files.extend(shards(&std::fs::read(index)?)?);
         } else {
             files.insert("model.safetensors".into());
         }
     }
+
     let needed = missing_bytes(&files, &available, &snapshot)?;
+
     storage::require_space(&paths.data, needed)?;
     storage::require_space(&paths.scratch, 0)?;
     eprintln!(
@@ -114,6 +129,7 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
         files.len(),
         needed as f64 / BYTES_PER_GB as f64
     );
+
     let snapshot = repo
         .snapshot_download()
         .revision(&commit)
@@ -121,6 +137,7 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
         .max_workers(4)
         .progress(progress::Reporter::default())
         .send()?;
+
     // Publish only completed, size-checked downloads. Links share durable Hub
     // blobs; packed and low-bit stores live separately in the model's packed/.
     ensure!(
@@ -128,19 +145,23 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
         "download did not produce all selected files at their expected sizes"
     );
     publish(&model, &snapshot, &files)?;
+
     Ok(model)
 }
 
 fn shards(bytes: &[u8]) -> Result<BTreeSet<String>> {
     let index: Index = serde_json::from_slice(bytes).context("safetensors index")?;
     let shards: BTreeSet<_> = index.weight_map.into_values().collect();
+
     ensure!(!shards.is_empty(), "empty safetensors index");
+
     for shard in &shards {
         ensure!(
             storage::safe_component(shard) && shard.ends_with(".safetensors"),
             "unsupported shard filename {shard:?}"
         );
     }
+
     Ok(shards)
 }
 
@@ -150,26 +171,32 @@ fn missing_bytes(
     snapshot: &Path,
 ) -> Result<u64> {
     let mut total = 0u64;
+
     for file in files {
         ensure!(
             storage::safe_component(file),
             "unsupported filename {file:?}"
         );
+
         let size = *available
             .get(file)
             .with_context(|| format!("checkpoint is missing {file}"))?;
+
         if !std::fs::metadata(snapshot.join(file)).is_ok_and(|m| m.is_file() && m.len() == size) {
             total = total.checked_add(size).context("download size overflow")?;
         }
     }
+
     Ok(total)
 }
 
 fn publish(model: &Path, snapshot: &Path, files: &BTreeSet<String>) -> Result<()> {
     storage::create_private_dir(model)?;
+
     for file in files {
         let dest = model.join(file);
         let source = snapshot.join(file).canonicalize()?;
+
         match std::fs::symlink_metadata(&dest) {
             Ok(_) => ensure!(
                 dest.canonicalize()? == source,
@@ -182,6 +209,7 @@ fn publish(model: &Path, snapshot: &Path, files: &BTreeSet<String>) -> Result<()
             Err(e) => return Err(e.into()),
         }
     }
+
     Ok(())
 }
 

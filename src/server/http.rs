@@ -11,11 +11,14 @@ fn line(reader: &mut impl BufRead, remaining: &mut usize) -> Result<String> {
     let n = reader
         .take((*remaining + 1) as u64)
         .read_until(b'\n', &mut bytes)?;
+
     ensure!(
         n > 0 && n <= *remaining && bytes.ends_with(b"\n"),
         "invalid or oversized HTTP headers"
     );
+
     *remaining -= n;
+
     Ok(String::from_utf8(bytes)?
         .trim_end_matches(['\r', '\n'])
         .to_owned())
@@ -29,21 +32,28 @@ pub(super) fn read_http(
     let mut remaining = 16 * BYTES_PER_KIB;
     let first = line(&mut reader, &mut remaining)?;
     let parts: Vec<_> = first.split_whitespace().collect();
+
     ensure!(
         parts.len() == 3 && parts[2].starts_with("HTTP/1."),
         "invalid request line"
     );
+
     let mut length = None;
     let mut expect = false;
+
     loop {
         let h = line(&mut reader, &mut remaining)?;
+
         if h.is_empty() {
             break;
         }
+
         let (key, value) = h.split_once(':').context("invalid header")?;
+
         match key.to_ascii_lowercase().as_str() {
             "content-length" => {
                 ensure!(length.is_none(), "duplicate Content-Length");
+
                 length = Some(
                     value
                         .trim()
@@ -59,22 +69,29 @@ pub(super) fn read_http(
                     value.trim().eq_ignore_ascii_case("100-continue"),
                     "unsupported Expect"
                 );
+
                 expect = true;
             }
             _ => {}
         }
     }
+
     let length = length.unwrap_or(0);
+
     ensure!(
         length <= max_body,
         "request body exceeds server limit of {max_body} bytes"
     );
+
     if expect {
         stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
         stream.flush()?;
     }
+
     let mut body = vec![0; length];
+
     reader.read_exact(&mut body)?;
+
     Ok((parts[0].to_owned(), parts[1].to_owned(), body))
 }
 
@@ -89,6 +106,7 @@ pub(super) fn respond(out: &mut impl Write, status: u16, body: &Value) -> Result
         503 => "Service Unavailable",
         _ => "Internal Server Error",
     };
+
     write!(
         out,
         "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -96,6 +114,7 @@ pub(super) fn respond(out: &mut impl Write, status: u16, body: &Value) -> Result
     )?;
     out.write_all(&bytes)?;
     out.flush()?;
+
     Ok(())
 }
 
@@ -110,6 +129,7 @@ pub(super) fn error(out: &mut TcpStream, status: u16, message: &str) -> Result<(
 pub(super) fn sse(out: &mut impl Write, body: &Value) -> Result<()> {
     writeln!(out, "data: {}\n", serde_json::to_string(body)?)?;
     out.flush()?;
+
     Ok(())
 }
 

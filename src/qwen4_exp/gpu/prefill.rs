@@ -138,19 +138,24 @@ impl<'a> Gpu<'a> {
             let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
             let enc = cb.computeCommandEncoder().context("encoder")?;
             let mut pending = pending;
+
             if let Some(pl) = &layer.ple {
                 if let Some(out) = pending.take() {
                     self.pf_inject(&enc, hyper, out, &pf.inj, t);
                 }
+
                 self.pf_ple(&enc, pl, base, t, pf)?;
             }
+
             self.pf_hc_read(&enc, &layer.attn_hc, t, pf, hyper, pending, true);
+
             if !self.skips("mixer") {
                 match &layer.mix {
                     Mix::Attn(a) => self.pf_attention(&enc, a, base, t, pf),
                     Mix::Delta(d) => self.pf_deltanet(&enc, d, t, pf),
                 }
             }
+
             self.pf_hc_read(&enc, &layer.mlp_hc, t, pf, hyper, Some(&pf.mix_out), true);
             self.router_b(
                 &enc,
@@ -165,6 +170,7 @@ impl<'a> Gpu<'a> {
             enc.endEncoding();
             cb.commit();
             cb.waitUntilCompleted();
+
             (
                 MoeRef {
                     record_layer: layer.moe.record_layer,
@@ -177,6 +183,7 @@ impl<'a> Gpu<'a> {
             )
         };
         let (fetched, fetched_bytes, wait_s, experts_s) = self.pf_experts(moe, t, pf)?;
+
         Ok((fetched, fetched_bytes, wait_s, block_s, experts_s))
     }
 
@@ -193,9 +200,12 @@ impl<'a> Gpu<'a> {
         all_logits: bool,
     ) -> Result<(u32, u32)> {
         let t = tokens.len();
+
         anyhow::ensure!(t >= 1, "empty chunk");
         anyhow::ensure!(self.pos + t <= self.max_t, "context capacity exceeded");
+
         let t0 = std::time::Instant::now();
+
         if self
             .pf
             .as_ref()
@@ -204,14 +214,17 @@ impl<'a> Gpu<'a> {
             self.pf = None;
             self.pf = Some(self.pf_alloc(t, all_logits)?);
         }
+
         let pf = self.pf.take().unwrap();
         let c = &self.p.cfg;
         let h = c.hidden_size as u32;
         let hh = c.hc_hidden();
         let pos = self.pos;
+
         self.tokens.truncate(pos);
         self.tokens.extend_from_slice(tokens);
         self.ngram_prefetch_start(pos, t);
+
         let write_ids = |buf: &Buf, ids: &[u32]| unsafe {
             std::ptr::copy_nonoverlapping(
                 ids.as_ptr(),
@@ -219,7 +232,9 @@ impl<'a> Gpu<'a> {
                 ids.len(),
             );
         };
+
         write_ids(&pf.ids, tokens);
+
         let mut st = ChunkStats {
             tokens: t,
             ..Default::default()
@@ -231,6 +246,7 @@ impl<'a> Gpu<'a> {
             let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
             let enc = cb.computeCommandEncoder().context("encoder")?;
             let (i0, nbu) = (0u32, t as u32);
+
             self.dispatch(
                 &enc,
                 &self.pipes.embed_rows,
@@ -248,7 +264,9 @@ impl<'a> Gpu<'a> {
                 256,
                 false,
             );
+
             let gp = self.group_params(false, 0.0);
+
             self.dispatch(
                 &enc,
                 &self.pipes.replicate_b,
@@ -266,7 +284,9 @@ impl<'a> Gpu<'a> {
             cb.commit();
             cb.waitUntilCompleted();
         }
+
         let n_layers = self.layers.len().min(layer_cap());
+
         for li in 0..n_layers {
             let pending = if li > 0 { Some(&pf.moe_out) } else { None };
             let (f, bytes, w, block_s, experts_s) =
@@ -275,22 +295,27 @@ impl<'a> Gpu<'a> {
             st.fetched_bytes += bytes;
             st.wait_s += w;
             st.gpu_experts_s += experts_s;
+
             if matches!(self.layers[li].mix, Mix::Delta(_)) {
                 st.gpu_delta_s += block_s;
             } else {
                 st.gpu_attn_s += block_s;
             }
         }
+
         // Final injection, then the LM head on the last row (all rows when
         // checking).
         let cur = {
             let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
             let enc = cb.computeCommandEncoder().context("encoder")?;
+
             self.pf_inject(&enc, &pf.hyper, &pf.moe_out, &pf.inj, t);
+
             if let Some(la) = &pf.logits_all {
                 self.pf_hc_read(&enc, &self.final_mixer, t, &pf, &pf.hyper, None, false);
                 self.qmm(&enc, &self.lm_head, &pf.mixed, la, t);
             }
+
             self.head_b(
                 &enc,
                 &self.final_mixer,
@@ -304,20 +329,25 @@ impl<'a> Gpu<'a> {
             enc.endEncoding();
             cb.commit();
             cb.waitUntilCompleted();
+
             self.read_u32(&self.scratch.ids, IDS_OUT + 1)[IDS_OUT]
         };
         // MTP head over the chunk: row r pairs the trunk residual at pos+r
         // with the token after it.
         let mut draft = cur;
+
         if let Some(mtp) = self.mtp.as_ref() {
             let (enorm, hnorm, fc_e, fc_h) = (mtp.enorm, mtp.hnorm, mtp.fc_e, mtp.fc_h);
             let mut next: Vec<u32> = tokens[1..].to_vec();
+
             next.push(next_after.unwrap_or(cur));
             write_ids(&pf.ids, &next);
+
             {
                 let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
                 let enc = cb.computeCommandEncoder().context("encoder")?;
                 let (i0, nbu) = (0u32, t as u32);
+
                 self.dispatch(
                     &enc,
                     &self.pipes.embed_rows,
@@ -349,7 +379,9 @@ impl<'a> Gpu<'a> {
                     t,
                 );
                 self.qmm(&enc, &fc_h, &pf.normed, &pf.fh, t * c.hc_count);
+
                 let gp = self.group_params(false, 0.0);
+
                 self.dispatch(
                     &enc,
                     &self.pipes.mtp_fold,
@@ -368,6 +400,7 @@ impl<'a> Gpu<'a> {
                 cb.commit();
                 cb.waitUntilCompleted();
             }
+
             let (f, bytes, w, block_s, experts_s) =
                 self.pf_layer(None, pos, t, &pf, &pf.mtp_hyper, None)?;
             st.fetched += f;
@@ -377,6 +410,7 @@ impl<'a> Gpu<'a> {
             let mtp = self.mtp.as_ref().unwrap();
             let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
             let enc = cb.computeCommandEncoder().context("encoder")?;
+
             self.pf_inject(&enc, &pf.mtp_hyper, &pf.moe_out, &pf.inj, t);
             self.head_b(
                 &enc,
@@ -388,8 +422,10 @@ impl<'a> Gpu<'a> {
                 &self.scratch.mtp_logits,
                 IDS_MTP_OUT,
             );
+
             // Keep the last row's residual where chained drafts re-enter.
             let n = hh as u32;
+
             self.dispatch(
                 &enc,
                 &self.pipes.copy_f32,
@@ -405,17 +441,24 @@ impl<'a> Gpu<'a> {
             enc.endEncoding();
             cb.commit();
             cb.waitUntilCompleted();
+
             draft = self.read_u32(&self.scratch.ids, IDS_MTP_OUT + 1)[IDS_MTP_OUT];
             self.mtp_len = pos + t;
         }
+
         self.pos = pos + t;
         self.batch_pos = self.pos;
         self.batch_nb = 0;
+
         self.join_pending()?;
+
         st.secs = t0.elapsed().as_secs_f64();
         st.ngram_s = self.ngram_gather_s.get() - ngram0;
+
         self.prefill_stats.push(st);
+
         self.pf = Some(pf);
+
         Ok((cur, draft))
     }
 
@@ -432,6 +475,7 @@ impl<'a> Gpu<'a> {
         let words = max_blocks.div_ceil(32);
         let pf = self.pf.as_ref().expect("prefill scratch released");
         let m = self.read_u32(&pf.vmask, (r + 1) * words);
+
         (0..max_blocks as u32)
             .filter(|&j| (m[r * words + (j / 32) as usize] >> (j % 32)) & 1 == 1)
             .collect()
@@ -443,6 +487,7 @@ impl<'a> Gpu<'a> {
         let c = &self.p.cfg;
         let stride = c.indexer_budget + c.indexer_compress_ratio;
         let n = self.read_u32(&self.scratch.nvis, r + 1)[r] as usize;
+
         self.read_u32(&self.scratch.vis, (r + 1) * stride)[r * stride..r * stride + n].to_vec()
     }
 
@@ -455,6 +500,7 @@ impl<'a> Gpu<'a> {
             .and_then(|pf| pf.logits_all.as_ref())
             .expect("prefill logits not kept");
         let ptr = la.contents().cast::<f32>();
+
         unsafe { std::slice::from_raw_parts(ptr.as_ptr().add(r * v), v) }
     }
 }

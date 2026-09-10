@@ -8,15 +8,18 @@ impl Gpu<'_> {
         let c = &self.p.cfg;
         let conv_dim = d.qkv.out;
         let nbu = t as u32;
+
         self.qmm(enc, &d.qkv, &pf.mixed, &pf.qkv, t);
         self.qmm(enc, &d.z, &pf.mixed, &pf.z, t);
         self.qmm(enc, &d.a, &pf.mixed, &pf.a, t);
         self.qmm(enc, &d.b, &pf.mixed, &pf.b, t);
+
         let cp = ConvParams {
             channels: conv_dim,
             ksize: c.linear_conv_kernel_dim as u32,
         };
         let snap = 0u32;
+
         self.dispatch(
             enc,
             &self.pipes.conv_b,
@@ -33,6 +36,7 @@ impl Gpu<'_> {
             256,
             false,
         );
+
         let p = DeltaPrepParams {
             n_k: c.linear_num_key_heads as u32,
             n_v: c.linear_num_value_heads as u32,
@@ -42,6 +46,7 @@ impl Gpu<'_> {
             nb: nbu,
             snap_after: 0,
         };
+
         self.dispatch(
             enc,
             &self.pipes.delta_norms,
@@ -69,7 +74,9 @@ impl Gpu<'_> {
             96,
             false,
         );
+
         let rows = c.linear_num_value_heads * c.linear_value_head_dim;
+
         self.dispatch(
             enc,
             &self.pipes.delta_scan2,

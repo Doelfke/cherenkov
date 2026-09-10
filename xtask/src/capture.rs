@@ -23,11 +23,13 @@ pub fn install_interrupt_handler() -> Result<()> {
         // The handler only writes a lock-free atomic; it allocates nothing.
         let previous =
             unsafe { libc::signal(signal, interrupt as *const () as libc::sighandler_t) };
+
         ensure!(
             previous != libc::SIG_ERR,
             "could not install interrupt handler"
         );
     }
+
     Ok(())
 }
 
@@ -40,6 +42,7 @@ pub fn power() -> Value {
     } else {
         "unknown"
     };
+
     json!({"source":source,"detail":detail})
 }
 
@@ -79,18 +82,23 @@ pub fn run(
     timeout: Option<Duration>,
 ) -> Result<Captured> {
     let before = power();
+
     ensure!(
         allow_battery || before["source"] == "ac",
         "AC power is required; reconnect and resume, or use --allow-battery"
     );
+
     let mut diagnostics = tempfile::tempfile()?;
     let mut command = Command::new(&args[0]);
+
     command.args(&args[1..]).current_dir(util::root());
+
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().starts_with("CHERENKOV_") {
             command.env_remove(name);
         }
     }
+
     let started = Instant::now();
     let mut child = ChildGuard(
         command
@@ -107,34 +115,49 @@ pub fn run(
             !INTERRUPTED.load(Ordering::Relaxed),
             "interrupted; current output retained, resume to retry"
         );
+
         if let Some(status) = child.0.try_wait()? {
             break status.code().unwrap_or(-1);
         }
+
         if timeout.is_some_and(|t| started.elapsed() >= t) {
             timed_out = true;
+
             child.0.kill()?;
+
             break child.0.wait()?.code().unwrap_or(-1);
         }
+
         if last_poll.elapsed() >= Duration::from_secs(30) {
             samples.push(power());
+
             let bytes = fs::read(output)?;
             cycle = metrics::repeated_tail(&String::from_utf8_lossy(&bytes));
+
             if cycle.is_some() {
                 child.0.kill()?;
+
                 break child.0.wait()?.code().unwrap_or(-1);
             }
+
             eprintln!(
                 "{:.0}s elapsed: {}",
                 started.elapsed().as_secs_f64(),
                 output.display()
             );
+
             last_poll = Instant::now();
         }
+
         std::thread::sleep(Duration::from_millis(100));
     };
+
     diagnostics.seek(SeekFrom::Start(0))?;
+
     let mut stderr = String::new();
+
     diagnostics.read_to_string(&mut stderr)?;
+
     Ok(Captured {
         code,
         stderr,

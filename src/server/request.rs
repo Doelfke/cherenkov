@@ -48,34 +48,43 @@ impl Request {
             self.max_tokens <= max_output_tokens,
             "max_tokens exceeds server output policy"
         );
+
         let ids = tok.encode(&self.prompt.text)?;
         let mut options = options.clone();
         options.no_eos = self.no_eos;
         options.sampling = self.sampling.clone();
+
         if let Some(context) = self.context {
             ensure!(
                 context > 0 && context <= options.max_ctx,
                 "context_tokens exceeds server capacity"
             );
+
             options.max_ctx = context;
         }
+
         runner::check_budget(
             ids.len(),
             self.max_tokens,
             options.effective_drafts(),
             options.max_ctx,
         )?;
+
         let mut boundaries = Vec::new();
+
         for (index, end) in self.prompt.boundaries.into_iter().enumerate() {
             let prefix = tok.encode(&self.prompt.text[..end])?;
             let mut matched = ids.iter().zip(&prefix).take_while(|(a, b)| a == b).count();
+
             // MTP state depends on the following token. At the reusable chat
             // prefix, keep that token inside the known-stable rendered text.
             if index == 0 && options.effective_drafts() > 0 {
                 matched = matched.saturating_sub(1);
             }
+
             boundaries.push(matched);
         }
+
         Ok(PreparedRequest {
             request: self,
             ids,
@@ -101,6 +110,7 @@ pub(super) fn parse_request(
         v["n"].is_null() || v["n"].as_u64() == Some(1),
         "n must be 1"
     );
+
     let (sampling, context) = match session {
         Some(input) => (input.sampling.clone(), Some(input.context)),
         None => (
@@ -108,6 +118,7 @@ pub(super) fn parse_request(
             context_tokens(v)?,
         ),
     };
+
     for key in [
         "tools",
         "tool_choice",
@@ -127,10 +138,12 @@ pub(super) fn parse_request(
     ] {
         ensure!(v[key].is_null(), "{key} is not supported");
     }
+
     ensure!(
         v["response_format"].is_null() || v["response_format"] == json!({"type":"text"}),
         "only text response_format is supported"
     );
+
     let max_tokens = v
         .get("max_completion_tokens")
         .filter(|v| !v.is_null())
@@ -151,6 +164,7 @@ pub(super) fn parse_request(
     let include_usage = match v.get("stream_options").filter(|v| !v.is_null()) {
         Some(o) => {
             ensure!(o.is_object(), "stream_options must be an object");
+
             o.get("include_usage")
                 .map(|v| v.as_bool().context("include_usage must be boolean"))
                 .transpose()?
@@ -159,6 +173,7 @@ pub(super) fn parse_request(
         None => defaults.include_usage,
     };
     let prompt = render_prompt(v, kind, session, template)?;
+
     Ok(Request {
         prompt,
         max_tokens,
@@ -178,14 +193,17 @@ fn render_prompt(
 ) -> Result<Prompt> {
     if kind == ApiKind::Completion {
         let text = v["prompt"].as_str().context("prompt must be a string")?;
+
         return Ok(Prompt::raw(text.to_owned()));
     }
+
     let messages = match session {
         Some(input) => input.messages.as_slice(),
         None => v["messages"]
             .as_array()
             .context("messages must be an array")?,
     };
+
     template
         .context("checkpoint has no chat template")?
         .chat(messages)

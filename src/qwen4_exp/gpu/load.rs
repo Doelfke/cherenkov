@@ -27,7 +27,9 @@ impl<'a> Gpu<'a> {
         memory_bytes: Option<usize>,
     ) -> Result<Self> {
         options.validate()?;
+
         let c = &p.cfg;
+
         anyhow::ensure!(
             c.hidden_size.is_multiple_of(256),
             "fn_norm_prep_b needs hidden % 256 == 0"
@@ -56,6 +58,7 @@ impl<'a> Gpu<'a> {
             c.output_gate_type == "sigmoid",
             "only the sigmoid DeltaNet output gate is implemented"
         );
+
         let ctx = MetalContext::new()?;
         let allocation_limit = memory_bytes
             .map(|bytes| {
@@ -64,7 +67,9 @@ impl<'a> Gpu<'a> {
                     .context("cache exceeds memory budget")
             })
             .transpose()?;
+
         ctx.allocation_limit.set(allocation_limit);
+
         let lib = ctx.compile_library(FORWARD_MSL)?;
         let blib = ctx.compile_library(BATCH_MSL)?;
         let per_nb = |base: &str| -> Result<[Pso; MAX_NB]> {
@@ -146,8 +151,10 @@ impl<'a> Gpu<'a> {
             let w = p.manifest.dense(&format!("{prefix}.weight"))?;
             let s = p.manifest.dense(&format!("{prefix}.scales"))?;
             let b = p.manifest.dense(&format!("{prefix}.biases"))?;
+
             anyhow::ensure!(w.dtype == "U32", "{prefix}: not a Q4 weight");
             anyhow::ensure!(w.offset % 16 == 0, "{prefix}: weight offset not 16-aligned");
+
             Ok(Q {
                 w: w.offset as usize,
                 s: s.offset as usize,
@@ -158,7 +165,9 @@ impl<'a> Gpu<'a> {
         };
         let t = |name: &str| -> Result<T> {
             let e = p.manifest.dense(name)?;
+
             anyhow::ensure!(e.dtype == "BF16", "{name}: expected BF16");
+
             Ok(T(e.offset as usize))
         };
         let hc = |prefix: &str, inject: bool| -> Result<Hc> {
@@ -188,6 +197,7 @@ impl<'a> Gpu<'a> {
             |lp: &str, linear: bool, record_layer: usize, with_ple: bool| -> Result<GLayer> {
                 let mix = if linear {
                     let d = format!("{lp}.linear_attn");
+
                     Mix::Delta(Delta {
                         qkv: q(&format!("{d}.in_proj_qkv"))?,
                         z: q(&format!("{d}.in_proj_z"))?,
@@ -205,6 +215,7 @@ impl<'a> Gpu<'a> {
                     })
                 } else {
                     let a = format!("{lp}.self_attn");
+
                     Mix::Attn(Attn {
                         q: q(&format!("{a}.q_proj"))?,
                         k: q(&format!("{a}.k_proj"))?,
@@ -236,6 +247,7 @@ impl<'a> Gpu<'a> {
                     let emb = format!("{pp}.ple_embedding");
                     let kernel = p.shape(&format!("{pp}.conv1d.weight"))?[2] as u32;
                     let span = (kernel - 1) * c.ngram_size as u32;
+
                     Some(Ple {
                         key: q(&format!("{pp}.key_proj"))?,
                         value: q(&format!("{pp}.value_proj"))?,
@@ -263,6 +275,7 @@ impl<'a> Gpu<'a> {
                 } else {
                     None
                 };
+
                 Ok(GLayer {
                     attn_hc: hc(&format!("{lp}.attn_hyper_connection"), true)?,
                     mlp_hc: hc(&format!("{lp}.mlp_hyper_connection"), true)?,
@@ -274,6 +287,7 @@ impl<'a> Gpu<'a> {
 
         let m = "language_model.model";
         let mut layers = Vec::with_capacity(c.num_hidden_layers);
+
         for l in 0..c.num_hidden_layers {
             layers.push(load_layer(
                 &format!("{m}.layers.{l}"),
@@ -282,12 +296,15 @@ impl<'a> Gpu<'a> {
                 c.ple_layer() == Some(l),
             )?);
         }
+
         let mtp = if c.mtp_num_hidden_layers > 0 && options.drafts > 0 {
             let layer = load_layer("mtp.layers.0", false, p.mtp_expert_layer(0)?, false)?;
+
             anyhow::ensure!(
                 matches!(layer.mix, Mix::Attn(_)),
                 "MTP layer must be full attention"
             );
+
             Some(Mtp {
                 enorm: t("mtp.pre_fc_norm_embedding.weight")?,
                 hnorm: t("mtp.pre_fc_norm_hidden.weight")?,
@@ -303,10 +320,12 @@ impl<'a> Gpu<'a> {
         let max_blk = max_t.div_ceil(ATTN_TB).max(ATTN_MAX_WG);
         let vocab = c.vocab_size;
         let inter = c.moe_intermediate_size;
+
         anyhow::ensure!(
             c.shared_expert_intermediate_size == inter,
             "shared expert width differs from routed experts"
         );
+
         let max_in = hh.max(c.ple_embed_dim).max(2 * h);
         let half_set = |rows: usize, in_dim: usize| -> Result<HalfSet> {
             Ok(HalfSet {
@@ -382,6 +401,7 @@ impl<'a> Gpu<'a> {
         let stride = p.manifest.experts.record_stride as usize;
         let (limit_gb, fixed_gb) = {
             use objc2_metal::MTLDevice as _;
+
             (
                 ctx.device.recommendedMaxWorkingSetSize() as f64 / BYTES_PER_GB as f64,
                 ctx.device.currentAllocatedSize() as f64 / BYTES_PER_GB as f64,
@@ -392,14 +412,17 @@ impl<'a> Gpu<'a> {
             fixed_gb + reserve as f64 / BYTES_PER_GB as f64,
             options.pool_gb,
         );
+
         if let Some(limit) = allocation_limit {
             // Keep prefill headroom outside the fixed expert allocation. The
             // allocation guard also bounds subsequent scratch growth.
             let available = limit as f64 / BYTES_PER_GB as f64 - fixed_gb - 1.0;
+
             anyhow::ensure!(
                 available > 0.0,
                 "fixed model state leaves no expert/prefill capacity"
             );
+
             if matches!(options.pool_gb, PoolBudget::Gb(_)) {
                 anyhow::ensure!(
                     gb <= available,
@@ -409,6 +432,7 @@ impl<'a> Gpu<'a> {
                 gb = gb.min(available);
             }
         }
+
         // CHERENKOV_POOL=set puts the pool in a residency set over the
         // file mapping (page cache as a second tier); the default copies
         // records into a wired buffer.
@@ -417,10 +441,12 @@ impl<'a> Gpu<'a> {
         // from the resident precision only when the latter is four bits.
         let all_bits = options.experts;
         let miss_bits = options.miss_bits();
+
         anyhow::ensure!(
             copy || (all_bits == 4 && miss_bits == 4),
             "the residency-set pool supports only 4-bit experts"
         );
+
         let low_bits = if all_bits == 3 || all_bits == 2 {
             all_bits
         } else {
@@ -428,6 +454,7 @@ impl<'a> Gpu<'a> {
         };
         let all_low_bits = all_bits == 3 || all_bits == 2;
         let mut low_bit_store = None;
+
         if (low_bits == 3 || low_bits == 2) && copy {
             // Build the store from experts.bin if it is missing, the wrong
             // size, or in an older layout. This pass over the 4-bit source
@@ -443,17 +470,22 @@ impl<'a> Gpu<'a> {
             let low_file = std::fs::File::open(&low_path)
                 .with_context(|| format!("opening {}", low_path.display()))?;
             let st = l;
+
             anyhow::ensure!(
                 st.stride > 0 && st.stride <= stride,
                 "{low_bits}-bit record stride {} does not fit a 4-bit slot",
                 st.stride
             );
+
             {
                 use std::os::unix::io::AsRawFd as _;
+
                 unsafe { libc::fcntl(low_file.as_raw_fd(), libc::F_NOCACHE, 1) };
             }
+
             low_bit_store = Some((st, low_file, low_path));
         }
+
         // Every record low-bit means a smaller slot and so more of them.
         let slot_stride = match (&low_bit_store, all_low_bits) {
             (Some((st, _, _)), true) => st.stride,
@@ -462,6 +494,7 @@ impl<'a> Gpu<'a> {
         let mut res = loop {
             let slots = (((gb * BYTES_PER_GB as f64) / slot_stride as f64).max(64.0) as usize)
                 .min(n_records);
+
             match residency::Pool::new(
                 &ctx,
                 p.experts.as_ptr(),
@@ -505,18 +538,24 @@ impl<'a> Gpu<'a> {
                     "synchronous misses"
                 }
             );
+
             st
         });
+
         {
             use std::os::unix::io::AsRawFd as _;
+
             unsafe { libc::fcntl(pool_file_nocache.as_raw_fd(), libc::F_NOCACHE, 1) };
         }
+
         let event_res = {
             use objc2_metal::MTLDevice as _;
+
             ctx.device.newSharedEvent().context("shared event")?
         };
         let (event, event_cpu) = {
             use objc2_metal::MTLDevice as _;
+
             (
                 ctx.device.newSharedEvent().context("shared event")?,
                 ctx.device.newSharedEvent().context("shared event")?,
@@ -526,6 +565,7 @@ impl<'a> Gpu<'a> {
         let slot_tab = ctx.new_buffer(n_rows * SLOT_STRIDE * 8)?;
         let wmap = ctx.new_buffer(n_rows * MAX_NB * SLOT_STRIDE * 4)?;
         let ring = ctx.new_buffer(prefill::RING * stride)?;
+
         Ok(Gpu {
             embed: q(&format!("{m}.embed_tokens"))?,
             final_mixer: hc(&format!("{m}.hyper_connection_mixer"), false)?,

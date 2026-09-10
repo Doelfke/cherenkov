@@ -27,6 +27,7 @@ pub struct ExpertRef<'a> {
 
 fn map(path: &Path) -> Result<Mmap> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+
     // Safety: packed files are read-only while the process runs.
     unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", path.display()))
 }
@@ -37,6 +38,7 @@ fn as_u32(bytes: &[u8]) -> &[u32] {
         0,
         "u32 view must be 4-byte aligned"
     );
+
     unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<u32>(), bytes.len() / 4) }
 }
 
@@ -46,6 +48,7 @@ fn as_bf16(bytes: &[u8]) -> &[bf16] {
         0,
         "bf16 view must be 2-byte aligned"
     );
+
     unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<bf16>(), bytes.len() / 2) }
 }
 
@@ -60,11 +63,14 @@ impl Packed {
             model_dir.join("packed")
         };
         let manifest = Manifest::load(&dir)?;
+
         anyhow::ensure!(
             manifest.experts.group == GROUP_SIZE,
             "expert group size must be 64"
         );
+
         let experts_path = dir.join("experts.bin");
+
         Ok(Packed {
             cfg,
             manifest,
@@ -79,6 +85,7 @@ impl Packed {
 
     pub fn dense_bytes(&self, name: &str) -> Result<&[u8]> {
         let e = self.manifest.dense(name)?;
+
         Ok(&self.dense[e.offset as usize..(e.offset + e.nbytes) as usize])
     }
 
@@ -88,13 +95,17 @@ impl Packed {
 
     pub fn bf16(&self, name: &str) -> Result<&[bf16]> {
         let e = self.manifest.dense(name)?;
+
         anyhow::ensure!(e.dtype == "BF16", "{name}: expected BF16, got {}", e.dtype);
+
         Ok(as_bf16(self.dense_bytes(name)?))
     }
 
     pub fn i64s(&self, name: &str) -> Result<Vec<i64>> {
         let e = self.manifest.dense(name)?;
+
         anyhow::ensure!(e.dtype == "I64", "{name}: expected I64, got {}", e.dtype);
+
         Ok(self
             .dense_bytes(name)?
             .as_chunks::<8>()
@@ -107,15 +118,19 @@ impl Packed {
     /// Affine 4-bit group-64 linear layer `{prefix}.{weight,scales,biases}`.
     pub fn qlinear(&self, prefix: &str) -> Result<QLinear<'_>> {
         let w = self.manifest.dense(&format!("{prefix}.weight"))?;
+
         anyhow::ensure!(w.dtype == "U32", "{prefix}.weight: expected U32");
+
         let out_dim = w.shape[0];
         let in_dim = w.shape[1] * 8;
         let s = self.manifest.dense(&format!("{prefix}.scales"))?;
+
         anyhow::ensure!(
             s.shape == vec![out_dim, in_dim / GROUP_SIZE],
             "{prefix}.scales shape {:?} is not group 64",
             s.shape
         );
+
         Ok(QLinear {
             out_dim,
             in_dim,
@@ -133,6 +148,7 @@ impl Packed {
     /// Record index for MTP layer `i`'s expert block.
     pub fn mtp_expert_layer(&self, i: usize) -> Result<usize> {
         let name = format!("mtp.layers.{i}.mlp.switch_mlp");
+
         self.manifest
             .experts
             .layer_prefixes
@@ -143,6 +159,7 @@ impl Packed {
 
     pub fn record_offset(&self, record_layer: usize, expert: usize) -> usize {
         let l = &self.manifest.experts;
+
         ((record_layer * l.experts + expert) as u64 * l.record_stride) as usize
     }
 
@@ -154,6 +171,7 @@ impl Packed {
         let w_up = (l.inter * l.hidden / 2) as u64;
         let s_up = (l.inter * (l.hidden / l.group) * 2) as u64;
         let s_down = (l.hidden * (l.inter / l.group) * 2) as u64;
+
         ExpertRef {
             gate: QLinear {
                 out_dim: l.inter,
@@ -182,7 +200,9 @@ impl Packed {
     /// Dequantize one hashed n-gram row (dim 160, group 32) into `dst`.
     pub fn ngram_row(&self, id: u64, dst: &mut [f32]) {
         let n = &self.manifest.ngram;
+
         debug_assert_eq!(dst.len(), n.dim);
+
         let base = (id * n.row_bytes) as usize;
         let rec = &self.ngram[base..base + n.row_bytes as usize];
         let wb = n.weight_bytes as usize;
@@ -190,6 +210,7 @@ impl Packed {
         let scales = &rec[wb..wb + sb];
         let biases = &rec[wb + sb..wb + 2 * sb];
         let g = n.group;
+
         for (i, out) in dst.iter_mut().enumerate() {
             let word = u32::from_le_bytes(rec[i / 8 * 4..i / 8 * 4 + 4].try_into().unwrap());
             let q = (word >> (4 * (i % 8))) & 0xF;

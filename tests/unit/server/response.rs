@@ -32,25 +32,32 @@ fn response_wrapper_preserves_endpoint_and_stream_formats() {
         ),
     ];
     let usage = json!({"prompt_tokens":5,"prompt_tokens_details":{"cached_tokens":2},"completion_tokens":3,"total_tokens":8});
+
     for (kind, id, object, chunk_object, final_choice, chunks) in cases {
         for streaming in [false, true] {
             for include_usage in [false, true] {
                 let mut output = Vec::new();
                 let mut response =
                     Response::for_writer(&mut output, kind, id, 123, streaming, include_usage);
+
                 response.start().unwrap();
                 response.text("Hello ").unwrap();
                 response.text("\u{e9}").unwrap();
                 response
                     .finish("Hello \u{e9}", "stop", usage.clone())
                     .unwrap();
+
                 let wire = String::from_utf8(output).unwrap();
                 let (headers, body) = wire.split_once("\r\n\r\n").unwrap();
+
                 assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"));
+
                 if streaming {
                     assert!(headers.contains("Content-Type: text/event-stream"));
+
                     let expected =
                         expected_stream(id, chunk_object, &chunks, include_usage.then_some(&usage));
+
                     assert_eq!(body, expected);
                 } else {
                     assert!(headers.contains("Content-Type: application/json"));
@@ -72,14 +79,20 @@ fn expected_stream(
     usage: Option<&Value>,
 ) -> String {
     let mut expected = String::new();
+
     for choice in chunks {
         let chunk = json!({"id":id,"object":chunk_object,"created":123,"model":"cherenkov","choices":[choice]});
+
         expected.push_str(&format!("data: {chunk}\n\n"));
     }
+
     if let Some(usage) = usage {
         let chunk = json!({"id":id,"object":chunk_object,"created":123,"model":"cherenkov","choices":[],"usage":usage});
+
         expected.push_str(&format!("data: {chunk}\n\n"));
     }
+
     expected.push_str("data: [DONE]\n\n");
+
     expected
 }

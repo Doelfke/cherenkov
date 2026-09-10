@@ -19,6 +19,7 @@ fn logits_diff(a: &[f32], b: &[f32]) -> (f32, f32) {
         .map(|(x, y)| (x - y).abs())
         .fold(0.0f32, f32::max);
     let scale = b.iter().map(|v| v.abs()).fold(0.0f32, f32::max).max(1e-6);
+
     (max_abs, max_abs / scale)
 }
 
@@ -30,10 +31,12 @@ pub(super) fn dump_run(gpu: &qwen4_exp::gpu::Gpu<'_>) -> Result<()> {
             gpu.expert_history.len()
         );
     }
+
     if let Ok(path) = std::env::var("CHERENKOV_DUMP_STATES") {
         // [step][block] = (router input, top-k), row 0 only; f32 little
         // endian after a small JSON header line.
         use std::io::Write as _;
+
         let mut f = std::io::BufWriter::new(std::fs::File::create(&path)?);
         let steps = gpu.state_history.len();
         let blocks = gpu.state_history.first().map_or(0, |s| s.len());
@@ -47,25 +50,31 @@ pub(super) fn dump_run(gpu: &qwen4_exp::gpu::Gpu<'_>) -> Result<()> {
             .first()
             .and_then(|s| s.first())
             .map_or(0, |b| b.1.len());
+
         // Steps carry 48 or 49 blocks (the folded MTP block only runs on
         // drafting steps), so each step is prefixed with its count.
         writeln!(
             f,
             "{{\"format\":2,\"steps\":{steps},\"blocks\":{blocks},\"hidden\":{hidden},\"k\":{k}}}"
         )?;
+
         for step in &gpu.state_history {
             f.write_all(&(step.len() as u32).to_le_bytes())?;
+
             for (x, ids) in step {
                 for v in x {
                     f.write_all(&v.to_le_bytes())?;
                 }
+
                 for id in ids {
                     f.write_all(&id.to_le_bytes())?;
                 }
             }
         }
+
         eprintln!("router states ({steps} steps x {blocks} blocks x {hidden}) written to {path}");
     }
+
     if let Ok(path) = std::env::var("CHERENKOV_DUMP_ROUTES") {
         std::fs::write(&path, serde_json::to_vec(&gpu.route_history)?)?;
         eprintln!(
@@ -73,6 +82,7 @@ pub(super) fn dump_run(gpu: &qwen4_exp::gpu::Gpu<'_>) -> Result<()> {
             gpu.route_history.len()
         );
     }
+
     if let Ok(path) = std::env::var("CHERENKOV_DUMP_LA") {
         std::fs::write(&path, serde_json::to_vec(&gpu.la_log)?)?;
         eprintln!(
@@ -80,6 +90,7 @@ pub(super) fn dump_run(gpu: &qwen4_exp::gpu::Gpu<'_>) -> Result<()> {
             gpu.la_log.len()
         );
     }
+
     Ok(())
 }
 
@@ -107,18 +118,22 @@ pub(super) fn qwen4_exp_check_rows(
         };
         let (abs, rel) = logits_diff(g, &ref_logits);
         let (ga, ra) = (argmax(g), argmax(&ref_logits));
+
         eprintln!(
             "  {label} {}: gpu argmax {ga} cpu argmax {ra} | max abs diff {abs:.4} (rel {rel:.2e}){}",
             pos0 + r,
             if ga == ra { "" } else { "  <-- MISMATCH" }
         );
+
         if let Some(next) = next {
             let hyper = st.last_hyper.clone();
             let (ml, _) = m.mtp_forward(next[r], &hyper, pos0 + r, st)?;
+
             if r + 1 == rows.len() {
                 let g = gpu.mtp_logits_row(if prefill { 0 } else { r });
                 let (abs, rel) = logits_diff(g, &ml);
                 let (ga, ra) = (argmax(g), argmax(&ml));
+
                 eprintln!(
                     "  {label} {} mtp: gpu draft {ga} cpu draft {ra} | max abs diff {abs:.4} (rel {rel:.2e}){}",
                     pos0 + r,
@@ -127,6 +142,7 @@ pub(super) fn qwen4_exp_check_rows(
             }
         }
     }
+
     Ok(())
 }
 
@@ -146,33 +162,41 @@ pub(super) fn dump_prefill_chunk(
             gpu.logits_row(row)
         };
         let token = argmax(logits);
+
         lines.push(format!(
             "{} {token} {:.4}",
             pos + row,
             logits[token as usize]
         ));
     }
+
     let cfg = &gpu.p.cfg;
+
     if pos + rows != prompt_tokens
         || prompt_tokens <= cfg.indexer_budget + cfg.indexer_compress_ratio
     {
         return;
     }
+
     if engine {
         let blocks = gpu.debug_engine_blocks(rows - 1);
+
         eprintln!(
             "engine last row: {} blocks selected, last 8 {:?}",
             blocks.len(),
             &blocks[blocks.len().saturating_sub(8)..]
         );
+
         return;
     }
+
     let vis = gpu.debug_row_vis(rows - 1);
     let blocks: Vec<u32> = vis
         .iter()
         .filter(|&&t| t % 4 == 0)
         .map(|&t| t / 4)
         .collect();
+
     eprintln!(
         "row path last row: {} visible tokens, last 8 {:?}; {} block starts, last 8 {:?}",
         vis.len(),
@@ -195,6 +219,7 @@ pub(super) fn dump_decode(
         )?;
         eprintln!("tokens written to {path}");
     }
+
     if std::env::var_os("CHERENKOV_TRACE").is_some() {
         for i in prefill_steps..gpu.step_ms.len() {
             eprintln!(
@@ -210,5 +235,6 @@ pub(super) fn dump_decode(
             );
         }
     }
+
     Ok(())
 }

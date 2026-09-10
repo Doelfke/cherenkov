@@ -100,9 +100,11 @@ impl<'a> Worker<'a> {
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                 }
             }
+
             for job in receiver.try_iter() {
                 self.prepare(job);
             }
+
             self.admit();
             self.turn();
             self.gpu.clear_profile();
@@ -130,10 +132,12 @@ impl<'a> Worker<'a> {
             Ok(p) => p,
             Err(e) => {
                 let _ = error(&mut job.stream, 400, &e.to_string());
+
                 self.state.update(|s| {
                     s.queued_requests -= 1;
                     s.failed_requests += 1;
                 });
+
                 return;
             }
         };
@@ -148,19 +152,24 @@ impl<'a> Worker<'a> {
         let token_bytes = context * 16;
         let message_bytes = 4 * (limits.request_bytes + limits.response_bytes);
         let reservation = checkpoint_bytes + sampler_bytes + token_bytes + message_bytes;
+
         if reservation > limits.active_state_mib * BYTES_PER_MIB {
             let _ = error(
                 &mut job.stream,
                 503,
                 "request exceeds active_state_mib; reduce token limits or increase the state budget",
             );
+
             self.state.update(|s| {
                 s.queued_requests -= 1;
                 s.rejected_requests += 1;
             });
+
             return;
         }
+
         job.body = serde_json::Value::Null;
+
         self.pending.push_back(Pending {
             job,
             prepared,
@@ -170,6 +179,7 @@ impl<'a> Worker<'a> {
 
     fn admit(&mut self) {
         let mut waiting = VecDeque::new();
+
         while let Some(mut pending) = self.pending.pop_front() {
             if pending.job.ticket.cancelled() {
                 let _ = error(
@@ -177,20 +187,27 @@ impl<'a> Worker<'a> {
                     499,
                     "request cancelled before admission",
                 );
+
                 self.state.update(|s| {
                     s.queued_requests -= 1;
                     s.cancelled_requests += 1;
                 });
+
                 continue;
             }
+
             let limits = &pending.job.settings.config.limits;
+
             if self.active.len() >= limits.active_requests
                 || self.reserved + pending.reservation > limits.active_state_mib * BYTES_PER_MIB
             {
                 waiting.push_back(pending);
+
                 continue;
             }
+
             self.state.begin();
+
             self.reserved += pending.reservation;
             let mut decoder = self.tok.inner.decode_stream(false);
             let output = Output::new(
@@ -200,6 +217,7 @@ impl<'a> Worker<'a> {
                 pending.job.ticket.clone(),
                 self.state.clone(),
             );
+
             self.active.push_back(Active {
                 prepared: pending.prepared,
                 phase: Phase::Ready,
@@ -219,7 +237,9 @@ impl<'a> Worker<'a> {
                 response_bytes: limits.response_bytes,
             });
         }
+
         self.pending = waiting;
+
         self.state
             .update(|s| s.active_state_reserved_bytes = self.reserved);
     }
@@ -228,6 +248,7 @@ impl<'a> Worker<'a> {
         if self.loaded.as_deref() == Some(&request.ticket.id) {
             return Ok(());
         }
+
         if let Some(previous) = self
             .active
             .iter_mut()
@@ -235,11 +256,15 @@ impl<'a> Worker<'a> {
         {
             self.gpu.save_into(&mut previous.checkpoint);
         }
+
         self.gpu.reset_request();
+
         if let Some(checkpoint) = &request.checkpoint {
             self.gpu.restore_prefix(checkpoint)?;
         }
+
         self.loaded = Some(request.ticket.id.clone());
+
         Ok(())
     }
 
@@ -260,20 +285,26 @@ impl<'a> Worker<'a> {
                 )
             })
         };
+
         if matches!(result, Ok(false)) && !request.ticket.cancelled() {
             self.active.push_back(request);
+
             return;
         }
+
         self.reserved -= request.reservation;
+
         if self.loaded.as_deref() == Some(&request.ticket.id) {
             self.loaded = None;
         }
+
         let cancelled = request.ticket.cancelled();
         // The output writer accounts for completion and delivery failures.
         let _ = match result {
             Err(e) if !cancelled => request.output.send(Frame::Error(e.to_string())),
             _ => request.finish(self.tok),
         };
+
         self.state.update(|s| {
             s.active_requests -= 1;
             s.active_state_reserved_bytes = self.reserved;
@@ -283,7 +314,9 @@ impl<'a> Worker<'a> {
 
     fn observe(&mut self) {
         self.state.observe(&self.gpu, &self.cache);
+
         let mut sessions = self.sessions.lock().unwrap();
+
         sessions.expire();
         self.state.update(|s| {
             s.active_state_reserved_bytes = self.reserved;
@@ -335,6 +368,7 @@ impl Active<'_> {
             self.phase_name(),
             self.generated().len(),
         );
+
         if matches!(self.phase, Phase::Ready) {
             let prefill = cache.begin(
                 gpu,
@@ -343,17 +377,22 @@ impl Active<'_> {
                 &self.prepared.options,
             )?;
             self.cached = prefill.cached;
+
             state.update(|s| {
                 s.prompt_tokens += self.prepared.ids.len() as u64;
                 s.cached_tokens += prefill.cached as u64;
             });
+
             self.phase = Phase::Prefill(prefill);
         }
+
         let started = Instant::now();
+
         if let Phase::Prefill(prefill) = &mut self.phase {
             if self.ticket.cancelled() {
                 return Ok(false);
             }
+
             let done = prefill.advance(
                 gpu,
                 cache,
@@ -361,10 +400,13 @@ impl Active<'_> {
                 &self.prepared.options,
                 quantum,
             )?;
+
             state.update(|s| s.prefill_seconds += started.elapsed().as_secs_f64());
+
             if !done || self.ticket.cancelled() {
                 return Ok(false);
             }
+
             let seed = std::mem::take(&mut prefill.seed);
             let rng = self.session.as_ref().and_then(|s| s.rng.clone());
             self.phase = Phase::Decode(Box::new(Decode::new(
@@ -375,13 +417,17 @@ impl Active<'_> {
                 self.prepared.request.max_tokens,
                 rng,
             )?));
+
             return Ok(false);
         }
+
         let Phase::Decode(decoder) = &mut self.phase else {
             unreachable!()
         };
+
         decoder.step(gpu, None, None, &mut |token| {
             ensure!(!self.ticket.cancelled(), "request cancelled");
+
             if let Some(delta) = (self.text_decoder)(token)? {
                 ensure!(
                     self.text.len() + delta.len() <= self.response_bytes,
@@ -390,34 +436,42 @@ impl Active<'_> {
                 self.text.push_str(&delta);
                 self.output.send(Frame::Text(delta))?;
             }
+
             state.token();
+
             Ok(())
         })?;
         state.update(|s| s.decode_seconds += started.elapsed().as_secs_f64());
+
         Ok(decoder.finish_reason.is_some())
     }
 
     fn finish(mut self, tok: &ChatTokenizer) -> Result<()> {
         let result = self.finish_response(tok);
+
         if let Err(e) = &result {
             let _ = self.output.send(Frame::Error(e.to_string()));
         }
+
         result
     }
 
     fn finish_response(&mut self, tok: &ChatTokenizer) -> Result<()> {
         let cancelled = self.ticket.cancelled();
         let full = tok.decode(self.generated())?;
+
         ensure!(
             full.len() <= self.response_bytes,
             "response exceeds response_bytes"
         );
+
         if let Some(tail) = full
             .strip_prefix(&self.text)
             .filter(|tail| !tail.is_empty())
         {
             self.output.send(Frame::Text(tail.to_owned()))?;
         }
+
         let (reason, rng) = match &self.phase {
             Phase::Decode(d) => (d.finish_reason.unwrap_or("cancelled"), d.rng()),
             _ => ("cancelled", None),
@@ -436,6 +490,7 @@ impl Active<'_> {
                 .map(|t| t.prepare(&full, rng))
                 .transpose()?
         };
+
         self.output.send(Frame::Finish {
             text: full,
             reason,

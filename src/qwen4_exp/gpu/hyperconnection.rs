@@ -5,6 +5,7 @@ use super::*;
 impl Gpu<'_> {
     pub(super) fn group_params(&self, eps: bool, shift: f32) -> GroupParams {
         let c = &self.p.cfg;
+
         GroupParams {
             n: c.hidden_size as u32,
             groups: c.hc_count as u32,
@@ -34,6 +35,7 @@ impl Gpu<'_> {
             eps: self.p.cfg.rms_norm_eps as f32,
             shift,
         };
+
         self.dispatch(
             enc,
             &self.pipes.group_norm_b,
@@ -75,6 +77,7 @@ impl Gpu<'_> {
             inject: pending.is_some() as u32,
         };
         let out = pending.unwrap_or(&self.scratch.mix_out);
+
         self.dispatch(
             enc,
             &self.pipes.norm_prep_b,
@@ -93,12 +96,14 @@ impl Gpu<'_> {
             256,
             true,
         );
+
         // Bottleneck down-projection with silu(./hc).
         let div = c.hc_count as f32;
         let qp = QmvParams {
             out_dim: hc.down.out,
             in_dim: hc.down.inp,
         };
+
         self.dispatch(
             enc,
             &self.pipes.qmv_silu_b[nb - 1],
@@ -117,14 +122,18 @@ impl Gpu<'_> {
             128,
             true,
         );
+
         // Injection logits from the normed stream.
         if inject && let Some(inj) = &hc.inject {
             self.qmv_h(enc, inj, &bufs.inj, nb, &bufs.h1);
         }
+
         // Up-projection back to the stream width, then the mix.
         self.prep_h(enc, &bufs.d, 0, hc.down.out, nb, &bufs.h2);
         self.qmv_h(enc, &hc.up, &bufs.u, nb, &bufs.h2);
+
         let gp = self.group_params(false, 0.0);
+
         self.dispatch(
             enc,
             &self.pipes.hc_mix_b,
@@ -146,6 +155,7 @@ impl Gpu<'_> {
         let c = &self.p.cfg;
         let gp = self.group_params(false, 0.0);
         let nbu = nb as u32;
+
         self.dispatch(
             enc,
             &self.pipes.inject_b,

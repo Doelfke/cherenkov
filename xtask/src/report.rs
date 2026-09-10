@@ -6,7 +6,9 @@ use std::{fmt::Write as _, fs, path::Path};
 
 pub fn median(mut values: Vec<f64>) -> f64 {
     values.sort_by(f64::total_cmp);
+
     let n = values.len();
+
     if n % 2 == 1 {
         values[n / 2]
     } else {
@@ -28,6 +30,7 @@ fn escape(s: &str) -> String {
 
 pub fn rows(report: &Value) -> Result<Vec<Value>> {
     let mut rows = Vec::new();
+
     for case in report["cases"].as_array().context("report cases")? {
         for config in report["configurations"]
             .as_array()
@@ -44,9 +47,11 @@ pub fn rows(report: &Value) -> Result<Vec<Value>> {
                 })
                 .map(|r| &r["metrics"])
                 .collect();
+
             if matching.is_empty() {
                 continue;
             }
+
             let memory = matching
                 .iter()
                 .filter_map(|r| r["metal_gb"].as_f64())
@@ -59,6 +64,7 @@ pub fn rows(report: &Value) -> Result<Vec<Value>> {
                 "runs": matching.len(),
                 "metal_gb": memory,
             });
+
             for key in [
                 "prompt_tokens",
                 "prefill_seconds",
@@ -74,9 +80,11 @@ pub fn rows(report: &Value) -> Result<Vec<Value>> {
                     .collect::<Result<Vec<_>>>()?;
                 row[key] = json!(median(values));
             }
+
             rows.push(row);
         }
     }
+
     Ok(rows)
 }
 
@@ -110,11 +118,13 @@ fn config_label(config: &Value) -> &str {
 
 pub fn write(out: &Path, report: &Value) -> Result<()> {
     util::write_json(&out.join("report.json"), report)?;
+
     let rows = rows(report)?;
     let mut summary = format!(
         "# Cherenkov benchmark\n\nSource commit: `{}`\n\nFresh processes; configurations interleaved and rotated. Loading and conversion\nare excluded from pp/s and tg/s. Medians include only complete, valid samples.\n\n| Case | Configuration | Runs | Output tokens | Decode s | Load s | pp/s | tg/s | Metal GB |\n| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n",
         text(&report["provenance"]["commit"])
     );
+
     for row in &rows {
         writeln!(
             summary,
@@ -130,10 +140,12 @@ pub fn write(out: &Path, report: &Value) -> Result<()> {
             number(row, "metal_gb")
         )?;
     }
+
     summary.push_str("\nOutput lengths differ: compare completion times alongside token rates.\nCompletion means EOS; generated answers are not graded for correctness.\nThe mixed 4/2-bit setting includes a timing-dependent deadline cut.\nSVG generation rates are separate from other completion workloads.\nMetal memory is reported after prefill scratch release, not its transient peak.\nPower is sampled at process boundaries and every 30 seconds; shorter changes\ncan be missed. Low-bit construction belongs to load time.\n\n[Pelican gallery](gallery.html). Full text is in `outputs/`; SVGs in `pelicans/`.\n");
     append_notes(&mut summary, report)?;
     fs::write(out.join("summary.md"), summary)?;
     fs::write(out.join("gallery.html"), gallery(report, &rows)?)?;
+
     Ok(())
 }
 
@@ -144,8 +156,10 @@ fn append_notes(summary: &mut String, report: &Value) -> Result<()> {
         .iter()
         .filter(|r| r["status"] != "ok")
         .collect();
+
     if !bad.is_empty() {
         summary.push_str("\n## Incomplete or invalid runs\n\n");
+
         for r in bad {
             writeln!(
                 summary,
@@ -155,12 +169,15 @@ fn append_notes(summary: &mut String, report: &Value) -> Result<()> {
             )?;
         }
     }
+
     if let Some(notes) = report["notes"].as_array() {
         summary.push_str("\n## Run notes\n\n");
+
         for note in notes {
             writeln!(summary, "- {}", text(note))?;
         }
     }
+
     Ok(())
 }
 
@@ -171,6 +188,7 @@ fn table(report: &Value, rows: &[Value], kind: &str, key: &str, caption: &str) -
     let mut table = format!(
         "<div class=table-scroll tabindex=0><table><caption>{caption}</caption><thead><tr><th scope=col>Workload</th>"
     );
+
     for c in configs {
         write!(
             table,
@@ -179,16 +197,20 @@ fn table(report: &Value, rows: &[Value], kind: &str, key: &str, caption: &str) -
             escape(config_label(c))
         )?;
     }
+
     table.push_str("</tr></thead><tbody>");
+
     for case in report["cases"].as_array().context("cases")? {
         if case["kind"].as_str().unwrap_or("decode") != kind {
             continue;
         }
+
         write!(
             table,
             "<tr><th scope=row>{}</th>",
             escape(case_label(text(&case["id"])))
         )?;
+
         for config in configs {
             match rows
                 .iter()
@@ -198,9 +220,12 @@ fn table(report: &Value, rows: &[Value], kind: &str, key: &str, caption: &str) -
                 None => table.push_str("<td>Pending</td>"),
             }
         }
+
         table.push_str("</tr>");
     }
+
     table.push_str("</tbody></table></div>");
+
     Ok(table)
 }
 
@@ -219,10 +244,13 @@ fn details(rows: &[Value]) -> Result<String> {
     let mut s = String::from(
         "<details><summary>Full phase timings and answer lengths</summary><div class=table-scroll tabindex=0><table class=details-table><thead><tr><th>Workload</th><th>Configuration</th>",
     );
+
     for (_, label) in fields {
         write!(s, "<th>{label}</th>")?;
     }
+
     s.push_str("</tr></thead><tbody>");
+
     for row in rows {
         write!(
             s,
@@ -230,25 +258,32 @@ fn details(rows: &[Value]) -> Result<String> {
             escape(case_label(text(&row["case"]))),
             escape(text(&row["label"]))
         )?;
+
         for (key, _) in fields {
             let decimals = match key {
                 "runs" | "prompt_tokens" | "output_tokens" => 0,
                 _ => 2,
             };
+
             write!(s, "<td>{:.*}</td>", decimals, number(row, key))?;
         }
+
         s.push_str("</tr>");
     }
+
     s.push_str("</tbody></table></div></details>");
+
     Ok(s)
 }
 
 fn cards(report: &Value) -> Result<String> {
     let mut cards = String::new();
+
     for case in report["cases"].as_array().context("cases")? {
         if case["kind"] != "svg" {
             continue;
         }
+
         for config in report["configurations"]
             .as_array()
             .context("configurations")?
@@ -258,23 +293,28 @@ fn cards(report: &Value) -> Result<String> {
                 "<article><h3>{}</h3>",
                 escape(text(&config["label"]))
             )?;
+
             let run = report["runs"]
                 .as_array()
                 .context("runs")?
                 .iter()
                 .rev()
                 .find(|r| r["case"] == case["id"] && r["configuration"] == config["id"]);
+
             if let Some(run) = run {
                 card_body(&mut cards, run)?;
             } else {
                 cards.push_str("<p>Queued. Drawings run after timing workloads.</p>");
             }
+
             cards.push_str("</article>");
         }
     }
+
     if cards.is_empty() {
         cards.push_str("<p>No drawing workloads selected.</p>");
     }
+
     Ok(cards)
 }
 
@@ -297,9 +337,11 @@ fn card_body(card: &mut String, run: &Value) -> Result<()> {
             escape(run["error"].as_str().unwrap_or(text(&run["status"])))
         )?;
     }
+
     if let Some(output) = run["output"].as_str() {
         write!(card, "<a href=\"{}\">Full output</a>", escape(output))?;
     }
+
     Ok(())
 }
 
@@ -324,6 +366,7 @@ fn progress(report: &Value) -> Result<String> {
     let planned = configs.len() as u64 * samples_per_config;
     let valid = runs.iter().filter(|r| r["status"] == "ok").count();
     let drawings = runs.iter().filter(|r| r["svg"].is_string()).count();
+
     Ok(format!(
         "{valid} of {planned} samples valid; {drawings} drawings available."
     ))
@@ -349,5 +392,6 @@ fn gallery(report: &Value, rows: &[Value]) -> Result<String> {
     } else {
         ""
     };
+
     Ok(page.replace("{{refresh}}", refresh))
 }

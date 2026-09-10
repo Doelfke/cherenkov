@@ -357,6 +357,7 @@ fn kv_q8_side(max_t: usize, kv_row: usize) -> (usize, usize) {
     let align = |v: usize| v.div_ceil(16384) * 16384;
     let qs = align(max_t * kv_row);
     let sc = align(max_t * kv_row / 32 * 2);
+
     (qs, qs + sc)
 }
 
@@ -364,6 +365,7 @@ fn kv_q8_side(max_t: usize, kv_row: usize) -> (usize, usize) {
 /// bisecting one execution path against another).
 fn layer_cap() -> usize {
     static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
     *CAP.get_or_init(|| {
         std::env::var("CHERENKOV_LAYERS")
             .ok()
@@ -375,11 +377,13 @@ fn layer_cap() -> usize {
 /// Unique entries in first-seen order.
 fn union_of(ids: &[u32]) -> Vec<u32> {
     let mut u: Vec<u32> = Vec::with_capacity(ids.len());
+
     for &e in ids {
         if !u.contains(&e) {
             u.push(e);
         }
     }
+
     u
 }
 
@@ -572,6 +576,7 @@ impl<'a> Gpu<'a> {
     pub fn logits_row(&self, r: usize) -> &[f32] {
         let v = self.p.cfg.vocab_size;
         let ptr = self.scratch.logits.contents().cast::<f32>();
+
         unsafe { std::slice::from_raw_parts(ptr.as_ptr().add(r * v), v) }
     }
 
@@ -588,11 +593,13 @@ impl<'a> Gpu<'a> {
     pub fn mtp_logits_row(&self, r: usize) -> &[f32] {
         let v = self.p.cfg.vocab_size;
         let ptr = self.scratch.mtp_logits.contents().cast::<f32>();
+
         unsafe { std::slice::from_raw_parts(ptr.as_ptr().add(r * v), v) }
     }
 
     pub fn allocated_gb(&self) -> f64 {
         use objc2_metal::MTLDevice as _;
+
         self.ctx.device.currentAllocatedSize() as f64 / BYTES_PER_GB as f64
     }
 
@@ -603,6 +610,7 @@ impl<'a> Gpu<'a> {
 
     pub fn working_set_limit_gb(&self) -> f64 {
         use objc2_metal::MTLDevice as _;
+
         self.ctx.device.recommendedMaxWorkingSetSize() as f64 / BYTES_PER_GB as f64
     }
 }

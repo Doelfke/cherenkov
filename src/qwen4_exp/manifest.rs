@@ -68,11 +68,13 @@ impl Manifest {
         let path = packed_dir.join("manifest.json");
         let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
         let manifest: Self = serde_json::from_slice(&bytes).context("manifest.json")?;
+
         anyhow::ensure!(
             manifest.version == 1,
             "unsupported packed layout version {}",
             manifest.version
         );
+
         Ok(manifest)
     }
 

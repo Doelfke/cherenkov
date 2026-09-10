@@ -26,6 +26,7 @@ pub fn prepare(model_dir: &Path, output: Option<&Path>, experts: &[u32]) -> Resu
         !experts.is_empty() && experts.iter().all(|bits| (2..=4).contains(bits)),
         "select at least one expert precision: 4, 3 or 2"
     );
+
     let packed_input = model_dir.join("manifest.json").is_file();
     let default_output = if packed_input {
         model_dir.to_owned()
@@ -33,6 +34,7 @@ pub fn prepare(model_dir: &Path, output: Option<&Path>, experts: &[u32]) -> Resu
         model_dir.join("packed")
     };
     let out = output.unwrap_or(&default_output);
+
     if !out.join("manifest.json").exists() {
         ensure!(
             !packed_input,
@@ -40,8 +42,10 @@ pub fn prepare(model_dir: &Path, output: Option<&Path>, experts: &[u32]) -> Resu
         );
         pack(model_dir, out)?;
     }
+
     let manifest = Manifest::load(out)?;
     let source = model_dir.canonicalize()?;
+
     // An explicit output must not silently select a different checkpoint.
     ensure!(
         out == default_output
@@ -52,9 +56,12 @@ pub fn prepare(model_dir: &Path, output: Option<&Path>, experts: &[u32]) -> Resu
     );
     copy_chat_metadata(model_dir, out)?;
     eprintln!("4-bit base ready at {}", out.display());
+
     let low_bits: Vec<_> = experts.iter().copied().filter(|&bits| bits != 4).collect();
+
     super::lowbit::ensure_many(out, &manifest.experts, &low_bits)?;
     eprintln!("requested expert stores ready");
+
     Ok(())
 }
 
@@ -63,12 +70,15 @@ fn copy_chat_metadata(model_dir: &Path, out_dir: &Path) -> Result<()> {
     for name in ["chat_template.jinja", "tokenizer_config.json"] {
         let source = model_dir.join(name);
         let target = out_dir.join(name);
+
         if !source.is_file() || target.exists() {
             continue;
         }
+
         std::fs::copy(source, target)
             .with_context(|| format!("copying {name} into the packed store"))?;
     }
+
     Ok(())
 }
 
@@ -119,9 +129,11 @@ impl Progress {
 
     fn add(&mut self, n: u64, what: &str) {
         self.bytes += n;
+
         if self.last.elapsed().as_secs_f64() > 10.0 {
             self.last = Instant::now();
             let s = self.start.elapsed().as_secs_f64();
+
             eprintln!(
                 "  {what}: {:.1} GB written, {:.2} GB/s, {:.0} s",
                 self.bytes as f64 / BYTES_PER_GB as f64,
@@ -134,11 +146,15 @@ impl Progress {
 
 fn pad_to(w: &mut BufWriter<File>, pos: &mut u64, align: u64) -> Result<()> {
     let rem = *pos % align;
+
     if rem != 0 {
         let pad = (align - rem) as usize;
+
         w.write_all(&vec![0u8; pad])?;
+
         *pos += pad as u64;
     }
+
     Ok(())
 }
 
@@ -148,14 +164,21 @@ pub fn pack(model_dir: &Path, out_dir: &Path) -> Result<()> {
         "a packed store already exists at {}; use it for inference",
         out_dir.display()
     );
+
     let weights = ModelWeights::load_raw(model_dir)?;
+
     crate::storage::create_private_dir(out_dir)?;
+
     // The aligned store is close to the source size; the common space guard
     // leaves another 2 GB for alignment and filesystem overhead.
     let source_bytes = weights.shards.iter().map(|s| s.mmap.len() as u64).sum();
+
     crate::storage::require_space(out_dir, source_bytes)?;
+
     let mut names: Vec<&String> = weights.tensors.keys().collect();
+
     names.sort();
+
     let mut progress = Progress::new();
     let dense = pack_dense(&weights, out_dir, &names, &mut progress)?;
     let layout = pack_experts(&weights, out_dir, &mut progress)?;
@@ -168,8 +191,10 @@ pub fn pack(model_dir: &Path, out_dir: &Path) -> Result<()> {
             std::fs::copy(model_dir.join(name), out_dir.join(name))
                 .with_context(|| format!("copying {name} into the packed store"))?;
         }
+
         copy_chat_metadata(model_dir, out_dir)?;
     }
+
     let manifest = Manifest {
         version: 1,
         source_dir: model_dir.display().to_string(),
@@ -177,6 +202,7 @@ pub fn pack(model_dir: &Path, out_dir: &Path) -> Result<()> {
         experts: layout,
         ngram: layout_n,
     };
+
     std::fs::write(
         out_dir.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest)?,
@@ -187,6 +213,7 @@ pub fn pack(model_dir: &Path, out_dir: &Path) -> Result<()> {
         progress.start.elapsed().as_secs_f64(),
         progress.bytes as f64 / BYTES_PER_GB as f64
     );
+
     Ok(())
 }
 
@@ -208,21 +235,28 @@ fn pack_dense(
 ) -> Result<Vec<DenseEntry>> {
     // ---- dense ----
     let mut dense = Vec::new();
+
     {
         let mut w = BufWriter::with_capacity(8 << 20, File::create(out_dir.join("dense.bin"))?);
         let mut pos = 0u64;
+
         for name in names {
             if matches!(classify(name), Class::Dense) {
                 prefetch(weights, weights.tensor(name)?);
             }
         }
+
         for name in names {
             if !matches!(classify(name), Class::Dense) {
                 continue;
             }
+
             let t = weights.tensor(name)?;
+
             pad_to(&mut w, &mut pos, DENSE_ALIGN)?;
+
             let b = weights.tensor_bytes(t);
+
             w.write_all(b)?;
             dense.push(DenseEntry {
                 name: (*name).clone(),
@@ -231,9 +265,12 @@ fn pack_dense(
                 offset: pos,
                 nbytes: b.len() as u64,
             });
+
             pos += b.len() as u64;
+
             progress.add(b.len() as u64, "dense");
         }
+
         w.flush()?;
         eprintln!(
             "dense.bin: {} tensors, {:.2} GB",
@@ -253,23 +290,30 @@ fn pack_experts(
     // ---- experts ----
     let mut prefixes: Vec<String> = Vec::new();
     let mut layer = 0;
+
     while weights.tensors.contains_key(&format!(
         "language_model.model.layers.{layer}.mlp.switch_mlp.gate_proj.weight"
     )) {
         prefixes.push(format!(
             "language_model.model.layers.{layer}.mlp.switch_mlp"
         ));
+
         layer += 1;
     }
+
     let mut mtp = 0;
+
     while weights
         .tensors
         .contains_key(&format!("mtp.layers.{mtp}.mlp.switch_mlp.gate_proj.weight"))
     {
         prefixes.push(format!("mtp.layers.{mtp}.mlp.switch_mlp"));
+
         mtp += 1;
     }
+
     anyhow::ensure!(!prefixes.is_empty(), "no expert tensors found");
+
     let gw = weights.tensor(&format!("{}.gate_proj.weight", prefixes[0]))?;
     let gs = weights.tensor(&format!("{}.gate_proj.scales", prefixes[0]))?;
     let dw = weights.tensor(&format!("{}.down_proj.weight", prefixes[0]))?;
@@ -277,13 +321,17 @@ fn pack_experts(
     let experts = gw.shape[0];
     let inter = gw.shape[1];
     let hidden = gw.shape[2] * 8;
+
     anyhow::ensure!(
         dw.shape == vec![experts, hidden, inter / 8],
         "down_proj shape {:?}",
         dw.shape
     );
+
     let group = hidden / gs.shape[2];
+
     anyhow::ensure!(group == inter / ds.shape[2], "group size mismatch");
+
     let w_up = (inter * hidden / 2) as u64; // packed 4-bit bytes for gate/up
     let w_down = (hidden * inter / 2) as u64;
     let s_up = (inter * (hidden / group) * 2) as u64;
@@ -293,6 +341,7 @@ fn pack_experts(
         let mut take = |n: u64| {
             let o = off;
             off += n;
+
             o
         };
         let gate_w = take(w_up);
@@ -305,6 +354,7 @@ fn pack_experts(
         let down_s = take(s_down);
         let down_b = take(s_down);
         let record_bytes = off;
+
         ExpertLayout {
             layers: prefixes.len(),
             experts,
@@ -325,6 +375,7 @@ fn pack_experts(
             down_b,
         }
     };
+
     eprintln!(
         "experts: {} layers x {} experts, record {} bytes (stride {}), {:.2} GB",
         layout.layers,
@@ -333,10 +384,12 @@ fn pack_experts(
         layout.record_stride,
         (layout.layers * experts) as f64 * layout.record_stride as f64 / BYTES_PER_GB as f64
     );
+
     {
         let mut w = BufWriter::with_capacity(8 << 20, File::create(out_dir.join("experts.bin"))?);
         let pad = vec![0u8; (layout.record_stride - layout.record_bytes) as usize];
         let mut pos = 0u64;
+
         const SUFFIXES: [&str; 9] = [
             "gate_proj.weight",
             "up_proj.weight",
@@ -348,17 +401,21 @@ fn pack_experts(
             "down_proj.scales",
             "down_proj.biases",
         ];
+
         for s in SUFFIXES {
             prefetch(weights, weights.tensor(&format!("{}.{s}", prefixes[0]))?);
         }
+
         for (pi, prefix) in prefixes.iter().enumerate() {
             if let Some(next) = prefixes.get(pi + 1) {
                 for s in SUFFIXES {
                     prefetch(weights, weights.tensor(&format!("{next}.{s}"))?);
                 }
             }
+
             let get = |suffix: &str| -> Result<&[u8]> {
                 let t = weights.tensor(&format!("{prefix}.{suffix}"))?;
+
                 Ok(weights.tensor_bytes(t))
             };
             let parts: [(&[u8], u64); 9] = [
@@ -372,6 +429,7 @@ fn pack_experts(
                 (get("down_proj.scales")?, s_down),
                 (get("down_proj.biases")?, s_down),
             ];
+
             for (buf, per) in &parts {
                 anyhow::ensure!(
                     buf.len() as u64 == *per * experts as u64,
@@ -380,16 +438,22 @@ fn pack_experts(
                     per
                 );
             }
+
             for e in 0..experts {
                 for (buf, per) in &parts {
                     let start = (e as u64 * per) as usize;
+
                     w.write_all(&buf[start..start + *per as usize])?;
                 }
+
                 w.write_all(&pad)?;
+
                 pos += layout.record_stride;
             }
+
             progress.add(experts as u64 * layout.record_stride, prefix);
         }
+
         w.flush()?;
         eprintln!("experts.bin: {:.2} GB", pos as f64 / BYTES_PER_GB as f64);
     }
@@ -417,6 +481,7 @@ fn pack_ngram(
     // Shard naming differs between converters: "shards.N" or "shard_N".
     let shard = |s: usize, suffix: &str| -> String {
         let dotted = format!("{ngram_prefix}.shards.{s}.{suffix}");
+
         if weights.tensors.contains_key(&dotted) {
             dotted
         } else {
@@ -425,7 +490,9 @@ fn pack_ngram(
     };
     let read_i64 = |name: &str| -> Result<Vec<i64>> {
         let t = weights.tensor(name)?;
+
         anyhow::ensure!(t.dtype == Dtype::I64, "{name}: expected I64");
+
         Ok(weights
             .tensor_bytes(t)
             .as_chunks::<8>()
@@ -438,10 +505,13 @@ fn pack_ngram(
     let head_sizes = read_i64(&format!("{ple_prefix}.ngram_heads_vocab_sizes"))?;
     let multipliers = read_i64(&format!("{ple_prefix}.layer_multipliers"))?;
     let mut shards = 0;
+
     while weights.tensors.contains_key(&shard(shards, "weight")) {
         shards += 1;
     }
+
     anyhow::ensure!(shards > 0, "no n-gram shard tensors under {ngram_prefix}");
+
     let s0w = weights.tensor(&shard(0, "weight"))?;
     let s0s = weights.tensor(&shard(0, "scales"))?;
     let rows_per_shard = s0w.shape[0];
@@ -461,38 +531,48 @@ fn pack_ngram(
         head_vocab_sizes: head_sizes.iter().map(|&v| v as u64).collect(),
         layer_multipliers: multipliers,
     };
+
     eprintln!(
         "ngram: {shards} shards x {rows_per_shard} rows, dim {dim}, group {ngroup}, row {row_bytes} bytes, {:.2} GB",
         layout_n.rows as f64 * row_bytes as f64 / BYTES_PER_GB as f64
     );
+
     {
         let mut w = BufWriter::with_capacity(8 << 20, File::create(out_dir.join("ngram.bin"))?);
+
         for part in ["weight", "scales", "biases"] {
             prefetch(weights, weights.tensor(&shard(0, part))?);
         }
+
         for s in 0..shards {
             if s + 1 < shards {
                 for part in ["weight", "scales", "biases"] {
                     prefetch(weights, weights.tensor(&shard(s + 1, part))?);
                 }
             }
+
             let wt = weights.tensor_bytes(weights.tensor(&shard(s, "weight"))?);
             let st = weights.tensor_bytes(weights.tensor(&shard(s, "scales"))?);
             let bt = weights.tensor_bytes(weights.tensor(&shard(s, "biases"))?);
+
             anyhow::ensure!(wt.len() as u64 == rows_per_shard as u64 * weight_bytes);
             anyhow::ensure!(st.len() as u64 == rows_per_shard as u64 * scale_bytes);
             anyhow::ensure!(bt.len() == st.len());
+
             let (wb, sb) = (weight_bytes as usize, scale_bytes as usize);
+
             for r in 0..rows_per_shard {
                 w.write_all(&wt[r * wb..(r + 1) * wb])?;
                 w.write_all(&st[r * sb..(r + 1) * sb])?;
                 w.write_all(&bt[r * sb..(r + 1) * sb])?;
             }
+
             progress.add(
                 rows_per_shard as u64 * row_bytes,
                 &format!("ngram shard {s}"),
             );
         }
+
         w.flush()?;
     }
 

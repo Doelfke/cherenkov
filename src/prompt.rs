@@ -32,11 +32,13 @@ impl ChatTemplate {
             Err(error) if error.kind() == IoErrorKind::NotFound => embedded_template(model_dir)?,
             Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
         };
+
         source.map(Self::new).transpose()
     }
 
     fn new(source: String) -> Result<Self> {
         let mut env = Environment::new();
+
         env.set_trim_blocks(true);
         env.set_lstrip_blocks(true);
         env.set_recursion_limit(64);
@@ -50,6 +52,7 @@ impl ChatTemplate {
         );
         env.add_template_owned("chat", source)
             .context("compiling checkpoint chat template")?;
+
         Ok(Self { env })
     }
 
@@ -65,13 +68,17 @@ impl ChatTemplate {
         // Keep the last user with empty content as a cache probe, and trust only
         // bytes that also occur at the beginning of the full rendered prompt.
         let mut stable_end = 0;
+
         if let Some(last_user) = messages.iter().rposition(|m| m["role"] == "user") {
             messages.truncate(last_user + 1);
+
             messages[last_user]["content"] = json!("");
+
             if let Ok(prefix) = self.render(&messages, false) {
                 stable_end = common_prefix(&text, &prefix);
             }
         }
+
         Ok(Prompt {
             text,
             boundaries: [stable_end, message_end],
@@ -106,9 +113,11 @@ fn embedded_template(model_dir: &Path) -> Result<Option<String>> {
     let config: Value =
         serde_json::from_slice(&bytes).context("reading tokenizer configuration")?;
     let template = &config["chat_template"];
+
     if let Some(source) = template.as_str() {
         return Ok(Some(source.to_owned()));
     }
+
     // Transformers also saves named templates; chat without tools uses "default".
     Ok(template.as_array().and_then(|templates| {
         templates
@@ -122,11 +131,14 @@ fn embedded_template(model_dir: &Path) -> Result<Option<String>> {
 
 fn text_messages(messages: &[Value]) -> Result<Vec<Value>> {
     ensure!(!messages.is_empty(), "messages must not be empty");
+
     let mut messages = messages.to_vec();
+
     for message in &mut messages {
         let role = message["role"]
             .as_str()
             .context("message role must be a string")?;
+
         ensure!(
             ["system", "developer", "user", "assistant"].contains(&role),
             "unsupported role {role}"
@@ -139,10 +151,12 @@ fn text_messages(messages: &[Value]) -> Result<Vec<Value>> {
             message["tool_calls"].is_null(),
             "tool calls are not supported"
         );
+
         if role == "developer" {
             message["role"] = json!("system");
         }
     }
+
     Ok(messages)
 }
 

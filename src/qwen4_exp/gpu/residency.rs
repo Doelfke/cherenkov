@@ -41,6 +41,7 @@ impl Landed {
 
     pub fn wait(&self) -> Result<()> {
         let t = std::time::Instant::now();
+
         while !self.done() {
             std::hint::spin_loop();
             anyhow::ensure!(
@@ -48,6 +49,7 @@ impl Landed {
                 "a record read did not land within 30 s"
             );
         }
+
         Ok(())
     }
 }
@@ -100,10 +102,13 @@ impl ReadPlan {
         let flags: Vec<Arc<AtomicBool>> = (0..need_len)
             .map(|_| Arc::new(AtomicBool::new(true)))
             .collect();
+
         for read in &self.items {
             let (dst, off, len) = (read.destination, read.file_offset, read.bytes);
             let flag = flags[read.need_index].clone();
+
             flag.store(false, Ordering::Release);
+
             let stride = self.stride;
             let cached = cached.try_clone().expect("dup fd");
             let src = if read.kind != 0 {
@@ -113,15 +118,18 @@ impl ReadPlan {
             }
             .try_clone()
             .expect("dup fd");
+
             std::thread::spawn(move || {
                 if dst != 0 {
                     fetch_into_slots(&src, &[(dst, off, len)]);
                 } else {
                     read_through_cache(&cached, stride, &[off]);
                 }
+
                 flag.store(true, Ordering::Release);
             });
         }
+
         flags.into_iter().map(Landed).collect()
     }
 
@@ -144,15 +152,19 @@ impl ReadPlan {
             .filter(|read| read.destination != 0 && read.kind != 0)
             .map(|read| (read.destination, read.file_offset, read.bytes))
             .collect();
+
         std::thread::scope(|s| {
             if !pulls.is_empty() {
                 s.spawn(move || read_through_cache(cached, self.stride, &pulls));
             }
+
             if !copies4.is_empty() {
                 s.spawn(move || fetch_into_slots(nocache, &copies4));
             }
+
             if !low_copies.is_empty() {
                 let low_file = self.low_file.as_ref().expect("low-bit store");
+
                 s.spawn(move || fetch_into_slots(low_file, &low_copies));
             }
         });
@@ -163,12 +175,14 @@ impl ReadPlan {
 /// Splitting reads did not improve measured latency.
 pub fn fetch_into_slots(file: &File, fetch: &[(usize, usize, usize)]) {
     use std::os::unix::fs::FileExt as _;
+
     std::thread::scope(|s| {
         for &(dst, off, len) in fetch {
             s.spawn(move || {
                 // Each slot has one writer and is not yet visible to the GPU.
                 let buf = unsafe { std::slice::from_raw_parts_mut(dst as *mut u8, len) };
                 let mut done = 0;
+
                 while done < buf.len() {
                     match file.read_at(&mut buf[done..], (off + done) as u64) {
                         Ok(0) | Err(_) => break,
@@ -185,14 +199,18 @@ pub fn fetch_into_slots(file: &File, fetch: &[(usize, usize, usize)]) {
 /// residency set will pin).
 fn read_through_cache(file: &File, stride: usize, offsets: &[usize]) {
     use std::os::unix::fs::FileExt as _;
+
     const PIECE: usize = 256 * BYTES_PER_KIB;
+
     std::thread::scope(|s| {
         for &off in offsets {
             s.spawn(move || {
                 let mut scratch = vec![0u8; PIECE];
                 let mut done = 0usize;
+
                 while done < stride {
                     let n = PIECE.min(stride - done);
+
                     match file.read_at(&mut scratch[..n], (off + done) as u64) {
                         Ok(0) | Err(_) => break,
                         Ok(k) => done += k,
@@ -233,6 +251,7 @@ impl Pool {
             c.low_file = Some(file);
             c.low_stride = low_stride;
             c.default_kind = default_kind;
+
             if default_kind != 0 {
                 for k in c.slot_kind.iter_mut() {
                     *k = default_kind;
@@ -311,6 +330,7 @@ impl Pool {
         match self {
             Pool::Set(r) => {
                 let mut items = Vec::new();
+
                 for (need_index, &rid) in need.iter().enumerate() {
                     if !r.cached(rid) {
                         items.push(PlannedRead {
@@ -322,7 +342,9 @@ impl Pool {
                         });
                     }
                 }
+
                 let warm = need.len() - items.len();
+
                 (
                     ReadPlan {
                         items,
@@ -344,6 +366,7 @@ impl Pool {
                         } else {
                             (rid * c.stride, c.stride)
                         };
+
                         PlannedRead {
                             destination: c.base + slot * c.slot_stride,
                             file_offset: off,
@@ -358,6 +381,7 @@ impl Pool {
                 } else {
                     None
                 };
+
                 (
                     ReadPlan {
                         items,
@@ -397,6 +421,7 @@ impl Pool {
                     2 => 1u64 << 62,
                     _ => 0,
                 };
+
                 Ok((c.gpu_base + slot as u64 * c.slot_stride as u64) | flag)
             }
         }
@@ -453,10 +478,12 @@ impl CopyPool {
             .device
             .newResidencySetWithDescriptor_error(&desc)
             .map_err(|e| anyhow::anyhow!("residency set: {e}"))?;
+
         set.addAllocation(ProtocolObject::from_ref(&*pool));
         set.commit();
         set.requestResidency();
         ctx.queue.addResidencySet(&set);
+
         Ok(CopyPool {
             base: pool.contents().cast::<u8>().as_ptr() as usize,
             gpu_base: pool.gpuAddress(),
@@ -477,36 +504,49 @@ impl CopyPool {
 
     fn acquire(&mut self, rids: &[usize], step: u64) -> Result<Vec<usize>> {
         let mut need = Vec::new();
+
         for &rid in rids {
             let mut slot = self.rec_slot[rid];
+
             if slot == u32::MAX {
                 // Victim: the least recently used slot not used this step.
                 let mut best = u32::MAX;
                 let mut best_used = u64::MAX;
+
                 for s in 0..self.budget {
                     let u = self.slot_used[s];
+
                     if u == step || u >= best_used {
                         continue;
                     }
+
                     best_used = u;
                     best = s as u32;
+
                     if u == 0 {
                         break;
                     }
                 }
+
                 anyhow::ensure!(best != u32::MAX, "expert pool too small for one step");
+
                 let old = self.slot_rec[best as usize];
+
                 if old != u32::MAX {
                     self.rec_slot[old as usize] = u32::MAX;
                 }
+
                 self.slot_rec[best as usize] = rid as u32;
                 self.slot_kind[best as usize] = self.default_kind;
                 self.rec_slot[rid] = best;
                 slot = best;
+
                 need.push(rid);
             }
+
             self.slot_used[slot as usize] = step;
         }
+
         Ok(need)
     }
 }
@@ -539,12 +579,16 @@ impl Residency {
         budget: usize,
     ) -> Result<Self> {
         let desc = MTLResidencySetDescriptor::new();
+
         unsafe { desc.setInitialCapacity(budget + 256) };
+
         let set = ctx
             .device
             .newResidencySetWithDescriptor_error(&desc)
             .map_err(|e| anyhow::anyhow!("residency set: {e}"))?;
+
         ctx.queue.addResidencySet(&set);
+
         Ok(Residency {
             set,
             base,
@@ -571,10 +615,12 @@ impl Residency {
         if let Some(b) = &self.bufs[rid] {
             return Ok(b.clone());
         }
+
         // Safety: page-aligned record inside the live read-only mapping.
         let b =
             unsafe { ctx.wrap_region(self.base.add(rid * self.stride).cast_mut(), self.stride)? };
         self.bufs[rid] = Some(b.clone());
+
         Ok(b)
     }
 
@@ -589,45 +635,62 @@ impl Residency {
     /// (`finish` after their pages are in memory).
     pub fn acquire(&mut self, ctx: &MetalContext, rids: &[usize], step: u64) -> Result<Vec<usize>> {
         let mut need = Vec::new();
+
         for &rid in rids {
             self.last_used[rid] = step;
+
             if self.is_member(rid) {
                 continue;
             }
+
             if self.members.len() >= self.budget {
                 self.evict_one(ctx, step)?;
             }
+
             need.push(rid);
         }
+
         Ok(need)
     }
 
     fn evict_one(&mut self, ctx: &MetalContext, step: u64) -> Result<()> {
         let mut best = usize::MAX;
         let mut best_used = u64::MAX;
+
         for (i, &m) in self.members.iter().enumerate() {
             let u = self.last_used[m as usize];
+
             if u != step && u < best_used {
                 best_used = u;
                 best = i;
+
                 if u == 0 {
                     break;
                 }
             }
         }
+
         anyhow::ensure!(
             best != usize::MAX,
             "expert residency budget too small for one step"
         );
+
         let victim = self.members[best] as usize;
         let last = self.members.len() - 1;
+
         self.members.swap(best, last);
+
         self.member_pos[self.members[best] as usize] = best as u32;
+
         self.members.pop();
+
         self.member_pos[victim] = u32::MAX;
         let b = self.buf(ctx, victim)?;
+
         self.set.removeAllocation(ProtocolObject::from_ref(&*b));
+
         self.dirty = true;
+
         Ok(())
     }
 
@@ -643,6 +706,7 @@ impl Residency {
                 vec.as_mut_ptr() as *mut libc::c_char,
             )
         };
+
         r == 0 && vec.iter().all(|v| v & 1 == 1)
     }
 
@@ -652,17 +716,25 @@ impl Residency {
             if self.is_member(rid) {
                 continue;
             }
+
             let b = self.buf(ctx, rid)?;
+
             self.set.addAllocation(ProtocolObject::from_ref(&*b));
+
             self.member_pos[rid] = self.members.len() as u32;
+
             self.members.push(rid as u32);
+
             self.dirty = true;
         }
+
         if self.dirty {
             self.set.commit();
             self.set.requestResidency();
+
             self.dirty = false;
         }
+
         Ok(())
     }
 }

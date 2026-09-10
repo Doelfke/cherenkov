@@ -168,7 +168,9 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         self.options().validate()?;
         self.validate_sessions()?;
+
         let l = &self.limits;
+
         ensure!(
             l.memory_gb.is_finite() && l.memory_gb > 0.0 && l.memory_gb <= 25.0,
             "limits.memory_gb must be positive and at most 25 decimal GB"
@@ -220,6 +222,7 @@ impl Config {
             self.server.socket.is_absolute(),
             "control socket path must be absolute"
         );
+
         Ok(())
     }
 
@@ -236,6 +239,7 @@ impl Config {
 
     fn validate_sessions(&self) -> Result<()> {
         let l = &self.limits;
+
         ensure!(
             (1..=16).contains(&l.active_requests),
             "active_requests must be 1..16"
@@ -257,6 +261,7 @@ impl Config {
             (1..=16 * BYTES_PER_MIB).contains(&l.response_bytes),
             "response_bytes must be 1..16777216"
         );
+
         Ok(())
     }
 
@@ -266,15 +271,19 @@ impl Config {
 
     pub fn restart_changes(&self, new: &Self) -> Vec<&'static str> {
         let mut changes = Vec::new();
+
         if self.server != new.server {
             changes.push("server");
         }
+
         if self.limits != new.limits {
             changes.push("limits");
         }
+
         if self.experts != new.experts {
             changes.push("experts");
         }
+
         changes
     }
 }
@@ -328,15 +337,19 @@ impl Overrides {
     fn apply(&self, c: &mut Config) {
         self.apply_server(&mut c.server);
         self.apply_experts(&mut c.experts);
+
         if let Some(n) = self.prefix_cache_mib {
             c.limits.prefix_cache_mib = n;
         }
+
         if let Some(n) = self.max_ctx {
             c.limits.context_tokens = n;
         }
+
         if let Some(n) = self.max_tokens {
             c.defaults.max_tokens = n;
         }
+
         if let Some(no_eos) = self.no_eos {
             c.defaults.no_eos = no_eos;
         }
@@ -346,15 +359,19 @@ impl Overrides {
         if let Some(root) = &self.root {
             server.root = Some(root.clone());
         }
+
         if let Some(p) = &self.model_dir {
             server.model_dir = Some(p.clone());
         }
+
         if let Some(p) = self.port {
             server.port = p;
         }
+
         if let Some(p) = &self.socket {
             server.socket = p.clone();
         }
+
         if let Some(n) = self.drafts {
             server.drafts = n;
         }
@@ -364,12 +381,15 @@ impl Overrides {
         if let Some(n) = self.experts {
             experts.resident_bits = n;
         }
+
         if let Some(n) = self.miss_experts {
             experts.miss_bits = Some(n);
         }
+
         if let Some(n) = self.cut_weak {
             experts.cut_weak = n;
         }
+
         if let Some(pool) = self.pool_gb {
             experts.pool_gb = pool;
         }
@@ -388,30 +408,38 @@ impl Source {
             let file =
                 std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
             let mut s = String::new();
+
             file.take(65537).read_to_string(&mut s)?;
             ensure!(s.len() <= 65536, "config exceeds 64 KiB");
+
             let mut c: Config =
                 toml::from_str(&s).with_context(|| format!("parsing {}", path.display()))?;
             let base = path.parent().context("config path has no parent")?;
+
             if let Some(p) = &mut c.server.model_dir
                 && p.is_relative()
             {
                 *p = base.join(&*p);
             }
+
             if let Some(root) = &mut c.server.root
                 && root.is_relative()
             {
                 *root = base.join(&*root);
             }
+
             if c.server.socket.is_relative() {
                 c.server.socket = base.join(&c.server.socket);
             }
+
             c
         } else {
             Config::default()
         };
+
         self.overrides.apply(&mut c);
         c.validate()?;
+
         Ok(c)
     }
 }

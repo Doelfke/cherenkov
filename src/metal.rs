@@ -23,6 +23,7 @@ impl MetalContext {
     pub fn new() -> Result<Self> {
         let device = MTLCreateSystemDefaultDevice().context("no Metal device")?;
         let queue = device.newCommandQueue().context("newCommandQueue failed")?;
+
         Ok(MetalContext {
             device,
             queue,
@@ -35,6 +36,7 @@ impl MetalContext {
         source: &str,
     ) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>> {
         let source = NSString::from_str(source);
+
         self.device
             .newLibraryWithSource_options_error(&source, None)
             .map_err(|e| anyhow::anyhow!("MSL compile failed: {e}"))
@@ -58,12 +60,14 @@ impl MetalContext {
         // it hits its register budget (Apple family 9). Warn so cliffs are
         // caught at load, not in tokens/s. Keep the warning for unexpectedly narrow pipelines.
         let max_threads = pso.maxTotalThreadsPerThreadgroup();
+
         if max_threads < 256 {
             eprintln!(
                 "WARNING: pipeline {function} register-limited: \
                  max_threads/tg = {max_threads} (< 256)"
             );
         }
+
         Ok(pso)
     }
 
@@ -78,13 +82,18 @@ impl MetalContext {
         bytes: &[u8],
     ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>> {
         let ptr = bytes.as_ptr() as *mut c_void;
+
         anyhow::ensure!(
             (ptr as usize).is_multiple_of(PAGE_SIZE),
             "mmap base is not page-aligned"
         );
+
         let len = bytes.len().div_ceil(PAGE_SIZE) * PAGE_SIZE;
+
         self.check_allocation(len)?;
+
         let ptr = NonNull::new(ptr).context("null mmap pointer")?;
+
         unsafe {
             self.device
                 .newBufferWithBytesNoCopy_length_options_deallocator(
@@ -116,8 +125,11 @@ impl MetalContext {
             len.is_multiple_of(PAGE_SIZE),
             "region length not page-aligned"
         );
+
         let ptr = NonNull::new(ptr.cast::<c_void>()).context("null region")?;
+
         self.check_allocation(len)?;
+
         unsafe {
             self.device
                 .newBufferWithBytesNoCopy_length_options_deallocator(
@@ -140,11 +152,13 @@ impl MetalContext {
                 "allocation would exceed the server memory budget; reduce pool or prefill chunk size"
             );
         }
+
         Ok(())
     }
 
     pub fn new_buffer(&self, len: usize) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>> {
         self.check_allocation(len)?;
+
         self.device
             .newBufferWithLength_options(len, MTLResourceOptions::empty())
             .context("newBufferWithLength failed")
@@ -156,10 +170,13 @@ impl MetalContext {
         let out = self.new_buffer(65536 * 4)?;
         let iters: u32 = 60_000;
         let mut last = 0.0f64;
+
         for _ in 0..2 {
             let cb = self.queue.commandBuffer().context("commandBuffer")?;
             let enc = cb.computeCommandEncoder().context("encoder")?;
+
             enc.setComputePipelineState(&pso);
+
             unsafe {
                 enc.setBuffer_offset_atIndex(Some(&out), 0, 0);
                 enc.setBytes_length_atIndex(
@@ -168,6 +185,7 @@ impl MetalContext {
                     1,
                 );
             }
+
             let grid = MTLSize {
                 width: 65536,
                 height: 1,
@@ -178,13 +196,18 @@ impl MetalContext {
                 height: 1,
                 depth: 1,
             };
+
             enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
             enc.endEncoding();
+
             let start = Instant::now();
+
             cb.commit();
             cb.waitUntilCompleted();
+
             last = start.elapsed().as_secs_f64() * 1e3;
         }
+
         Ok(last)
     }
 }

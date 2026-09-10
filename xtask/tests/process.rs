@@ -23,6 +23,7 @@ impl Fixture {
         let directory = tempfile::tempdir()?;
         let root = directory.path();
         let binary = root.join("engine");
+
         fs::write(
             &binary,
             "#!/bin/sh\ndir=$(dirname \"$0\")\necho $$ > \"$dir/pid\"\n[ -z \"${CHERENKOV_FN_FAKE+x}\" ] || exit 99\ncat \"$dir/answer\"\ncat \"$dir/telemetry\" >&2\n",
@@ -36,12 +37,17 @@ impl Fixture {
             root.join("telemetry"),
             include_str!("fixtures/telemetry.txt"),
         )?;
+
         let model = root.join("model");
+
         fs::create_dir_all(model.join("packed"))?;
+
         for name in ["config.json", "tokenizer.json", "packed/manifest.json"] {
             fs::write(model.join(name), "{}")?;
         }
+
         let suite = root.join("suite.json");
+
         util::write_json(
             &suite,
             &json!({
@@ -53,7 +59,9 @@ impl Fixture {
                 ]
             }),
         )?;
+
         let output = root.join("report");
+
         Ok(Self {
             directory,
             binary,
@@ -65,6 +73,7 @@ impl Fixture {
 
     fn command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+
         command
             .arg("bench")
             .arg(&self.model)
@@ -76,6 +85,7 @@ impl Fixture {
             .arg(&self.output)
             .arg("--allow-battery")
             .env("CHERENKOV_FN_FAKE", "1");
+
         command
     }
 
@@ -95,8 +105,11 @@ fn successful(output: Output) {
 #[test]
 fn suite_runs_resumes_and_keeps_svg_passive() -> Result<()> {
     let fixture = Fixture::new(128)?;
+
     successful(fixture.command().output()?);
+
     let first = fixture.report()?;
+
     assert_eq!(first["runs"].as_array().unwrap().len(), 2);
     assert!(
         first["runs"]
@@ -109,16 +122,22 @@ fn suite_runs_resumes_and_keeps_svg_passive() -> Result<()> {
     assert!(fixture.output.join("pelicans/exact.svg").exists());
     successful(fixture.command().arg("--resume").output()?);
     assert_eq!(fixture.report()?["runs"], first["runs"]);
+
     let html = fs::read_to_string(fixture.output.join("gallery.html"))?;
+
     assert!(html.contains("<img ") && !html.contains("<svg"));
+
     Ok(())
 }
 
 #[test]
 fn capped_answers_are_retained_but_excluded() -> Result<()> {
     let fixture = Fixture::new(64)?;
+
     successful(fixture.command().output()?);
+
     let report = fixture.report()?;
+
     assert!(
         report["runs"]
             .as_array()
@@ -128,6 +147,7 @@ fn capped_answers_are_retained_but_excluded() -> Result<()> {
     );
     assert!(xtask::report::rows(&report)?.is_empty());
     assert!(!fixture.output.join("pelicans/exact.svg").exists());
+
     Ok(())
 }
 
@@ -135,12 +155,15 @@ fn capped_answers_are_retained_but_excluded() -> Result<()> {
 fn failed_memory_check_stops_then_resume_retries() -> Result<()> {
     let fixture = Fixture::new(128)?;
     let telemetry = include_str!("fixtures/telemetry.txt");
+
     fs::write(
         fixture.directory.path().join("telemetry"),
         telemetry.replace("20.98", "26.00"),
     )?;
     assert!(!fixture.command().output()?.status.success());
+
     let failed = fixture.report()?;
+
     assert_eq!(failed["runs"].as_array().unwrap().len(), 1);
     assert_eq!(failed["runs"][0]["status"], "failed");
     assert!(
@@ -158,6 +181,7 @@ fn failed_memory_check_stops_then_resume_retries() -> Result<()> {
             .iter()
             .all(|r| r["status"] == "ok")
     );
+
     Ok(())
 }
 
@@ -172,18 +196,22 @@ fn timeout_reaps_the_engine() -> Result<()> {
         true,
         Some(Duration::from_millis(100)),
     )?;
+
     assert!(result.timed_out && result.code != 0);
     assert!(start.elapsed() < Duration::from_secs(5));
+
     Ok(())
 }
 
 #[test]
 fn interrupt_reaps_the_engine_and_leaves_a_resumable_report() -> Result<()> {
     let fixture = Fixture::new(128)?;
+
     fs::write(
         &fixture.binary,
         "#!/bin/sh\ndir=$(dirname \"$0\")\necho $$ > \"$dir/pid\"\nexec /bin/sleep 60\n",
     )?;
+
     let mut parent = capture::ChildGuard(
         fixture
             .command()
@@ -193,24 +221,30 @@ fn interrupt_reaps_the_engine_and_leaves_a_resumable_report() -> Result<()> {
     );
     let pid_path = fixture.directory.path().join("pid");
     let start = Instant::now();
+
     while !pid_path.exists() {
         assert!(start.elapsed() < Duration::from_secs(10));
         assert!(parent.0.try_wait()?.is_none());
         std::thread::sleep(Duration::from_millis(20));
     }
+
     let pid: libc::pid_t = fs::read_to_string(pid_path)?.trim().parse()?;
+
     // Signal only the runner: its child must be explicitly stopped during unwind.
     assert_eq!(
         unsafe { libc::kill(parent.0.id() as libc::pid_t, libc::SIGTERM) },
         0
     );
+
     let status = loop {
         if let Some(status) = parent.0.try_wait()? {
             break status;
         }
+
         assert!(start.elapsed() < Duration::from_secs(10));
         std::thread::sleep(Duration::from_millis(20));
     };
+
     assert!(!status.success());
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(
@@ -219,5 +253,6 @@ fn interrupt_reaps_the_engine_and_leaves_a_resumable_report() -> Result<()> {
     );
     assert_eq!(fixture.report()?["runs"], json!([]));
     assert!(fixture.output.join("outputs/r1-code-exact.txt").exists());
+
     Ok(())
 }

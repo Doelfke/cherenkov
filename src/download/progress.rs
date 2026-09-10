@@ -17,6 +17,7 @@ impl ProgressHandler for Reporter {
         let ProgressEvent::Download(event) = event else {
             return;
         };
+
         match event {
             DownloadEvent::AggregateProgress {
                 bytes_completed,
@@ -24,12 +25,14 @@ impl ProgressHandler for Reporter {
                 ..
             } => {
                 let mut last = self.last.lock().unwrap();
+
                 if last.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) {
                     eprintln!(
                         "download {:.2}/{:.2} GB",
                         *bytes_completed as f64 / BYTES_PER_GB as f64,
                         *total_bytes as f64 / BYTES_PER_GB as f64
                     );
+
                     *last = Some(Instant::now());
                 }
             }

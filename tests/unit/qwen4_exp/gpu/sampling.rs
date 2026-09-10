@@ -10,18 +10,22 @@ fn greedy_argmax_preserves_ties_and_partial_blocks() {
     let final_reduce = ctx.pipeline(&library, "argmax_final").unwrap();
     let grid_stride = ARGMAX_TGS * 256;
     let len = grid_stride + 35;
+
     for scenario in 0..3 {
         let mut values = vec![f32::NEG_INFINITY; len];
         let expected = match scenario {
             0 => {
                 values.fill(-10.0);
+
                 for index in [5, 36, 4097, grid_stride + 5] {
                     values[index] = 3.5;
                 }
+
                 5
             }
             1 => {
                 values[len - 1] = -1.0;
+
                 len - 1
             }
             _ => 0,
@@ -32,11 +36,14 @@ fn greedy_argmax_preserves_ties_and_partial_blocks() {
         let ids = upload(&ctx, &[u32::MAX; 3]);
         let cb = ctx.queue.commandBuffer().unwrap();
         let enc = cb.computeCommandEncoder().unwrap();
+
         enc.setComputePipelineState(&partial);
+
         unsafe {
             enc.setBuffer_offset_atIndex(Some(&logits), 0, 0);
             enc.setBuffer_offset_atIndex(Some(&partials), 0, 1);
         }
+
         set_bytes(&enc, 2, &(len as u32));
         enc.dispatchThreadgroups_threadsPerThreadgroup(
             MTLSize {
@@ -52,10 +59,12 @@ fn greedy_argmax_preserves_ties_and_partial_blocks() {
         );
         enc.memoryBarrierWithScope(objc2_metal::MTLBarrierScope::Buffers);
         enc.setComputePipelineState(&final_reduce);
+
         unsafe {
             enc.setBuffer_offset_atIndex(Some(&partials), 0, 0);
             enc.setBuffer_offset_atIndex(Some(&ids), 0, 1);
         }
+
         set_bytes(&enc, 2, &(ARGMAX_TGS as u32));
         set_bytes(&enc, 3, &0u32);
         enc.dispatchThreadgroups_threadsPerThreadgroup(

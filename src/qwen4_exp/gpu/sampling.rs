@@ -20,12 +20,16 @@ impl Gpu<'_> {
     ) {
         let s = &self.scratch;
         let vocab = self.p.cfg.vocab_size;
+
         self.hc_read_b(enc, mixer, nb, hyper, hyper_off, pending, &s.hc, false);
+
         if !self.skips("lmhead") {
             self.qmv_h(enc, &self.lm_head, logits, nb, &s.hc.h1);
         }
+
         let n = vocab as u32;
         let np = ARGMAX_TGS as u32;
+
         for b in 0..nb {
             self.dispatch(
                 enc,
@@ -39,7 +43,9 @@ impl Gpu<'_> {
                 256,
                 true,
             );
+
             let step = (ids_out + b - 1) as u32;
+
             self.dispatch(
                 enc,
                 &self.pipes.argmax_final,

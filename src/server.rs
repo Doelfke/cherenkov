@@ -53,11 +53,13 @@ pub fn serve(source: Source) -> Result<()> {
     let model_dir = config.model_dir()?;
     let mut options = config.options();
     options.repack = source.overrides.repack;
+
     ensure!(
         !options.repack || options.build_missing_store,
         "--repack conflicts with build_missing_store=false"
     );
     options.validate()?;
+
     let cache_bytes = config.cache_bytes();
     let cache = PrefixCache::new(
         cache_bytes,
@@ -68,7 +70,9 @@ pub fn serve(source: Source) -> Result<()> {
     let requests = Arc::new(registry::Registry::default());
     let sessions = Arc::new(std::sync::Mutex::new(sessions::Store::new(&config)));
     let _control = control::Listener::start(&config.server.socket, state.clone())?;
+
     eprintln!("control socket: {}", config.server.socket.display());
+
     let listener =
         TcpListener::bind(("127.0.0.1", config.server.port)).context("binding server")?;
     let address = listener.local_addr()?;
@@ -81,6 +85,7 @@ pub fn serve(source: Source) -> Result<()> {
         config.reserved_bytes(),
         Some(config.memory_bytes()),
     )?;
+
     ensure!(
         gpu.allocated_gb() + config.reserved_bytes() as f64 / BYTES_PER_GB as f64
             <= config.limits.memory_gb,
@@ -91,41 +96,53 @@ pub fn serve(source: Source) -> Result<()> {
         s.ready = true;
         s.http_address = Some(address.to_string());
     });
+
     if options.cut_weak > 0.0 {
         eprintln!("WARNING: --cut-weak makes output depend on disk timing and non-reproducible.");
     }
+
     eprintln!(
         "cherenkov serving http://{address}/v1, model {MODEL}, {:.2} GB Metal",
         gpu.allocated_gb()
     );
+
     let (tx, rx) = mpsc::sync_channel::<Job>(config.limits.queued_requests);
     let connections = state.clone();
     let network_sessions = sessions.clone();
+
     std::thread::spawn(move || {
         let active = Arc::new(AtomicUsize::new(0));
+
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
+
             if active.fetch_add(1, Ordering::AcqRel) >= config.limits.http_readers {
                 active.fetch_sub(1, Ordering::AcqRel);
                 stream.set_write_timeout(Some(Duration::from_secs(1))).ok();
                 connections.update(|s| s.rejected_requests += 1);
+
                 let _ = error(&mut stream, 503, "too many connections");
+
                 continue;
             }
+
             let tx = tx.clone();
             let active = active.clone();
             let state = connections.clone();
             let requests = requests.clone();
             let sessions = network_sessions.clone();
+
             std::thread::spawn(move || {
                 if let Err(e) = connection(stream, &tx, &state, &requests, &sessions) {
                     eprintln!("HTTP connection: {e:#}");
                 }
+
                 active.fetch_sub(1, Ordering::AcqRel);
             });
         }
     });
     worker::Worker::new(gpu, &tok, options, cache, state, sessions).run(rx);
+
     Ok(())
 }
 

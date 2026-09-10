@@ -13,10 +13,12 @@ impl Gpu<'_> {
         let hd = c.head_dim as u32;
         let kv_row = c.num_key_value_heads * c.head_dim;
         let nbu = nb as u32;
+
         self.qmv_h(enc, &a.q, &s.qg, nb, &s.hc.h1);
         self.qmv_h(enc, &a.k, &s.k, nb, &s.hc.h1);
         self.qmv_h(enc, &a.v, &s.v, nb, &s.hc.h1);
         self.qmv_h(enc, &a.iqk, &s.iqk, nb, &s.hc.h1);
+
         let rot = (c.head_dim as f64 * c.partial_rotary_factor) as u32;
         // Indexer: cache this batch's raw keys, refresh the blocks it
         // completes, and pick blocks for rows past the budget.
@@ -43,6 +45,7 @@ impl Gpu<'_> {
             vis_stride: vis_stride as u32,
             mask_words: max_blocks.div_ceil(32) as u32,
         };
+
         self.dispatch(
             enc,
             &self.pipes.index_append,
@@ -55,6 +58,7 @@ impl Gpu<'_> {
             256,
             false,
         );
+
         if ip.b1 > ip.b0 {
             self.dispatch(
                 enc,
@@ -70,7 +74,9 @@ impl Gpu<'_> {
                 true,
             );
         }
+
         let any_selective = (base_pos + nb) / ratio > kblk;
+
         if any_selective {
             self.dispatch(
                 enc,
@@ -113,6 +119,7 @@ impl Gpu<'_> {
                 true,
             );
         }
+
         let qp = QkRopeParams {
             n_heads: c.num_attention_heads as u32,
             head_dim: hd,
@@ -122,6 +129,7 @@ impl Gpu<'_> {
             theta: c.rope_parameters.rope_theta as f32,
             eps: c.rms_norm_eps as f32,
         };
+
         self.dispatch(
             enc,
             &self.pipes.qk_norm_rope_b,
@@ -135,11 +143,13 @@ impl Gpu<'_> {
             128,
             true,
         );
+
         let kp = QkRopeParams {
             n_heads: c.num_key_value_heads as u32,
             stride: hd,
             ..qp
         };
+
         self.dispatch(
             enc,
             &self.pipes.qk_norm_rope_b,
@@ -153,6 +163,7 @@ impl Gpu<'_> {
             128,
             true,
         );
+
         let kq = KvQParams {
             row: kv_row as u32,
             t0: base_pos as u32,
@@ -160,6 +171,7 @@ impl Gpu<'_> {
             scale_off: kv_q8_side(self.max_t, kv_row).0 as u32,
         };
         let sgs = nb * (kv_row / 32) * 2;
+
         self.dispatch(
             enc,
             &self.pipes.kv_append_q8,
@@ -174,9 +186,11 @@ impl Gpu<'_> {
             128,
             true,
         );
+
         // Split-T flash decode per row over its causal prefix, or over the
         // indexer's visible token list once the row is past the budget.
         let n_rep = c.num_attention_heads / c.num_key_value_heads;
+
         for b in 0..nb {
             let t_len = base_pos + b + 1;
             let blocks = t_len / ratio;
@@ -205,6 +219,7 @@ impl Gpu<'_> {
             } else {
                 &self.pipes.attn_part2_q8
             };
+
             self.dispatch(
                 enc,
                 pipe,
@@ -216,6 +231,7 @@ impl Gpu<'_> {
                     set_bytes(e, 4, &ap);
                     set_bytes(e, 5, &n_wg_u);
                     set_bytes(e, 6, &scale_off);
+
                     if selective {
                         self.bind(e, 7, &s.vis, b * vis_stride * 4);
                     }
@@ -224,8 +240,10 @@ impl Gpu<'_> {
                 32 * n_rep,
                 true,
             );
+
             let nblk = n_wg as u32;
             let out_off = (b * c.num_attention_heads * c.head_dim) as u32;
+
             self.dispatch(
                 enc,
                 &self.pipes.attn_combine,
@@ -242,6 +260,7 @@ impl Gpu<'_> {
                 true,
             );
         }
+
         self.prep_h(
             enc,
             &s.attn_out,

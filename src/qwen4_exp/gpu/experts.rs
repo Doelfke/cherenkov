@@ -20,6 +20,7 @@ impl Gpu<'_> {
         let rows = c.num_experts as u32;
         let cols = c.hidden_size as u32;
         let nbu = nb as u32;
+
         self.dispatch(
             enc,
             &self.pipes.bf16_matvec_b,
@@ -35,8 +36,10 @@ impl Gpu<'_> {
             128,
             true,
         );
+
         let k = k as u32;
         let renorm = c.norm_topk_prob as u32;
+
         self.dispatch(
             enc,
             &self.pipes.topk_softmax_b,
@@ -67,12 +70,15 @@ impl Gpu<'_> {
         let h = c.hidden_size as u32;
         let k = c.num_experts_per_tok;
         let shared = !self.skips("shared");
+
         if self.skips("experts") {
             if part == 0 {
                 self.zero(enc, &s.moe_out, nb as u32 * h);
             }
+
             return;
         }
+
         let n_max = (k * nb) as u32;
         let mp = MoeBParams {
             inter,
@@ -113,6 +119,7 @@ impl Gpu<'_> {
         };
         let n_exp = (n_max + 1) as usize;
         let rows2 = 2 * inter as usize;
+
         self.dispatch(
             enc,
             &self.pipes.moe_gate_up_b[nb - 1],

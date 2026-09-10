@@ -58,6 +58,7 @@ impl Store {
         if self.idle.is_zero() {
             return;
         }
+
         self.entries
             .retain(|_, session| session.busy.is_some() || session.touched.elapsed() < self.idle);
     }
@@ -67,6 +68,7 @@ impl Store {
             extra <= self.capacity,
             "session history exceeds its memory budget"
         );
+
         while self.bytes() + extra > self.capacity || (create && self.entries.len() >= self.limit) {
             let oldest = self
                 .entries
@@ -75,27 +77,34 @@ impl Store {
                 .min_by_key(|(_, session)| session.touched)
                 .map(|(id, _)| id.clone())
                 .ok_or(Failure(503, "all session storage is in use"))?;
+
             self.entries.remove(&oldest);
+
             self.evictions += 1;
         }
+
         Ok(())
     }
 
     pub(super) fn create(&mut self, body: &Value, config: &Config) -> Result<String> {
         ensure!(self.limit > 0, "retained sessions are disabled");
         ensure!(body.is_object(), "session must be an object");
+
         let sampling = Sampling::from_request(body, &config.defaults.sampling)?;
         let context = body
             .get("context_tokens")
             .map(|v| v.as_u64().context("context_tokens must be an integer"))
             .transpose()?
             .unwrap_or(config.limits.context_tokens as u64) as usize;
+
         ensure!(
             context > 0 && context <= config.limits.context_tokens,
             "context_tokens exceeds server capacity"
         );
         self.expire();
+
         let id = registry::id("session");
+
         self.make_room(size_of::<Session>() + id.capacity() + 2, true, None)?;
         self.entries.insert(
             id.clone(),
@@ -109,15 +118,18 @@ impl Store {
                 reserved: 0,
             },
         );
+
         Ok(id)
     }
 
     pub(super) fn show(&mut self, id: &str) -> Result<Value> {
         self.expire();
+
         let session = self
             .entries
             .get(id)
             .ok_or(Failure(404, "unknown or expired session"))?;
+
         Ok(json!({
             "id": id,
             "object": "session",
@@ -130,15 +142,18 @@ impl Store {
 
     pub(super) fn delete(&mut self, id: &str) -> Result<()> {
         self.expire();
+
         let session = self
             .entries
             .get(id)
             .ok_or(Failure(404, "unknown or expired session"))?;
+
         ensure!(
             session.busy.is_none(),
             Failure(409, "cancel the active request before deleting its session")
         );
         self.entries.remove(id);
+
         Ok(())
     }
 }
@@ -169,25 +184,33 @@ impl Turn {
             .as_array()
             .context("sessions require chat messages")?
             .clone();
+
         ensure!(!incoming.is_empty(), "messages must not be empty");
+
         let mut guard = store.lock().unwrap();
+
         guard.expire();
+
         let session = guard
             .entries
             .get_mut(&id)
             .ok_or(Failure(404, "unknown or expired session"))?;
+
         ensure!(
             session.busy.is_none(),
             Failure(409, "session already has an active request")
         );
+
         let sampling = Sampling::from_request(body, &session.sampling)?;
         let restart_rng = body.get("seed").is_some_and(|v| !v.is_null());
         let mut messages: Vec<Value> = serde_json::from_str(&session.history)?;
+
         messages.extend(incoming);
         ensure!(
             serde_json::to_vec(&messages)?.len() <= request_bytes,
             "session history and new messages exceed request_bytes"
         );
+
         let context = body
             .get("context_tokens")
             .map(|v| {
@@ -197,10 +220,12 @@ impl Turn {
             })
             .transpose()?
             .unwrap_or(session.context);
+
         ensure!(
             context > 0 && context <= session.context,
             "context_tokens exceeds session capacity"
         );
+
         // Explicit seeds restart the stream. Otherwise an existing session continues it.
         let rng = if restart_rng {
             None
@@ -208,6 +233,7 @@ impl Turn {
             session.rng.clone()
         };
         session.busy = Some(request_id.to_owned());
+
         Ok(Some(Self {
             id,
             store: store.clone(),
@@ -224,6 +250,7 @@ impl Turn {
         self.input
             .messages
             .push(json!({"role":"assistant", "content":text}));
+
         let history = serde_json::to_string(&self.input.messages)?.into_boxed_str();
         let mut store = self.store.lock().unwrap();
         let previous_bytes = store
@@ -233,15 +260,20 @@ impl Turn {
             .history
             .len();
         let growth = history.len().saturating_sub(previous_bytes);
+
         store.make_room(growth, false, Some(&self.id))?;
+
         store
             .entries
             .get_mut(&self.id)
             .expect("pinned session")
             .reserved = growth;
+
         drop(store);
+
         // Greedy turns consume no draws; retain the previous random stream.
         let rng = rng.or_else(|| self.rng.clone());
+
         Ok(Commit {
             turn: self,
             history,

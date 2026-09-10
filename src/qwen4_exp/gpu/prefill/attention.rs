@@ -70,6 +70,7 @@ impl Gpu<'_> {
             theta: c.rope_parameters.rope_theta as f32,
             eps: c.rms_norm_eps as f32,
         };
+
         self.dispatch(
             enc,
             &self.pipes.qk_norm_rope_b,
@@ -89,6 +90,7 @@ impl Gpu<'_> {
             stride: hd as u32,
             ..qp
         };
+
         self.dispatch(
             enc,
             &self.pipes.qk_norm_rope_b,
@@ -128,6 +130,7 @@ impl Gpu<'_> {
             vis_stride: (c.indexer_budget + ratio) as u32,
             mask_words: mask_words as u32,
         };
+
         self.dispatch(
             enc,
             &self.pipes.index_append,
@@ -209,6 +212,7 @@ impl Gpu<'_> {
             nb: nbu,
             scale_off: scale_off as u32,
         };
+
         self.dispatch(
             enc,
             &self.pipes.kv_append_q8,
@@ -227,6 +231,7 @@ impl Gpu<'_> {
         // GEMM attention per query sub-chunk and kv head.
         let n_heads_u = n_heads as u32;
         let mut q0 = 0;
+
         while q0 < t {
             let n = (t - q0).min(QS);
             let base_q = base + q0;
@@ -245,6 +250,7 @@ impl Gpu<'_> {
                 scale: (hd as f32).powf(-0.5) * std::f32::consts::LOG2_E,
             };
             let qg_off = q0 * n_heads * 2 * hd * 4;
+
             self.dispatch(
                 enc,
                 &self.pipes.attn_q_stage,
@@ -266,11 +272,13 @@ impl Gpu<'_> {
                 ratio: ratio as u32,
                 k: kblk as u32,
             };
+
             for hk in 0..n_kv {
                 let ph = AttnGemmParams {
                     head: hk as u32,
                     ..p
                 };
+
                 self.dispatch(
                     enc,
                     &self.pipes.attn_kv_stage,
@@ -294,6 +302,7 @@ impl Gpu<'_> {
                     ldb: hd as u32,
                     ldc: kl_pad as u32,
                 };
+
                 self.dispatch(
                     enc,
                     &self.pipes.gemm_hh,
@@ -331,6 +340,7 @@ impl Gpu<'_> {
                     ldb: kl_pad as u32,
                     ldc: hd as u32,
                 };
+
                 self.dispatch(
                     enc,
                     &self.pipes.gemm_hh,

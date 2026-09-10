@@ -10,10 +10,12 @@ impl Gpu<'_> {
             out_dim: q.out,
             in_dim: q.inp,
         };
+
         if q.out < 128 {
             // The GEMM tiles clamp-load and store 8-row fragments; narrow
             // outputs go through the plain per-output kernel.
             let nbu = nb as u32;
+
             self.dispatch(
                 enc,
                 &self.pipes.qmv_small_b,
@@ -30,8 +32,10 @@ impl Gpu<'_> {
                 128,
                 true,
             );
+
             return;
         }
+
         self.qmm_tiled(
             enc,
             wb,
@@ -60,6 +64,7 @@ impl Gpu<'_> {
             self.qmm_from(enc, wb, q, x, y, nb);
         } else {
             let pipes = &self.pipes.expert_qmm[(bits - 2) as usize];
+
             self.qmm_tiled(enc, wb, q, x, y, nb, [&pipes[0], &pipes[1], &pipes[2]]);
         }
     }
@@ -79,6 +84,7 @@ impl Gpu<'_> {
         };
         let ntt = nb.div_ceil(tile).max(1);
         let nttu = ntt as u32;
+
         self.dispatch(
             enc,
             pipe,

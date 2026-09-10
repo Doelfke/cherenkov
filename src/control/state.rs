@@ -109,18 +109,22 @@ impl State {
             self.source.path.is_some(),
             "server was started without --config"
         );
+
         let next = self.source.resolve()?;
         let mut current = self.config.lock().unwrap();
         let changes = current.config.restart_changes(&next);
+
         ensure!(
             changes.is_empty(),
             "restart required for changed sections: {}",
             changes.join(", ")
         );
+
         if current.config != next {
             current.config = next;
             current.generation += 1;
         }
+
         Ok(json!({"generation": current.generation, "config": current.config}))
     }
 
@@ -130,6 +134,7 @@ impl State {
 
     pub fn status(&self) -> Value {
         let config = self.config();
+
         json!({"uptime_seconds": self.started.elapsed().as_secs_f64(),
             "stats": *self.stats.lock().unwrap(),
             "capabilities": {"active_sequences": config.config.limits.active_requests,
@@ -157,6 +162,7 @@ impl State {
     pub fn token(&self) {
         self.update(|s| {
             s.generated_tokens += 1;
+
             if let Some(current) = &mut s.current {
                 current.generated_tokens += 1;
             }
@@ -169,6 +175,7 @@ impl State {
         cache: &crate::prefix_cache::PrefixCache,
     ) {
         let (entries, bytes, evictions) = cache.stats();
+
         self.update(|s| {
             s.cache = CacheStats {
                 entries,

@@ -6,6 +6,7 @@ use super::*;
 
 fn rope_partial(x: &mut [f32], pos: usize, rot: usize, theta: f32) {
     let half = rot / 2;
+
     for j in 0..half {
         let inv_freq = theta.powf(-(2.0 * j as f32) / rot as f32);
         let angle = pos as f32 * inv_freq;
@@ -20,6 +21,7 @@ fn rope_partial(x: &mut [f32], pos: usize, rot: usize, theta: f32) {
 fn rms_norm(x: &mut [f32], w: &[bf16], eps: f32) {
     let ms = x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32;
     let inv = 1.0 / (ms + eps).sqrt();
+
     for (v, wi) in x.iter_mut().zip(w) {
         *v = *v * inv * wi.to_f32();
     }
@@ -47,30 +49,41 @@ fn select_ref(
 ) -> Vec<u32> {
     let t_len = pos + 1;
     let blocks = t_len / g.ratio;
+
     if blocks <= g.k {
         return (0..t_len as u32).collect();
     }
+
     let mut q = iq_raw.to_vec();
+
     for h in 0..g.inh {
         let qh = &mut q[h * g.ihd..(h + 1) * g.ihd];
+
         rms_norm(qh, wq, g.eps);
         rope_partial(qh, pos, g.rot, g.theta);
     }
+
     let mut scores: Vec<(f32, usize)> = Vec::with_capacity(blocks);
     let mut pooled = vec![0.0f32; g.ihd];
+
     for b in 0..blocks {
         pooled.fill(0.0);
+
         for t in b * g.ratio..(b + 1) * g.ratio {
             for d in 0..g.ihd {
                 pooled[d] += ikc[t * g.ihd + d];
             }
         }
+
         for v in pooled.iter_mut() {
             *v /= g.ratio as f32;
         }
+
         rms_norm(&mut pooled, wk, g.eps);
         rope_partial(&mut pooled, b * g.ratio, g.rot, g.theta);
+
         let mut s = 0.0f32;
+
         for h in 0..g.inh {
             let dot: f32 = q[h * g.ihd..(h + 1) * g.ihd]
                 .iter()
@@ -79,15 +92,20 @@ fn select_ref(
                 .sum();
             s += dot.max(0.0);
         }
+
         scores.push((s / (g.ihd as f32).sqrt(), b));
     }
+
     scores.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+
     let mut sel: Vec<u32> = scores[..g.k]
         .iter()
         .flat_map(|&(_, b)| (b * g.ratio..(b + 1) * g.ratio).map(|t| t as u32))
         .collect();
+
     sel.extend((blocks * g.ratio..t_len).map(|t| t as u32));
     sel.sort_unstable();
+
     sel
 }
 
@@ -96,11 +114,14 @@ type DispatchJob<'a> = (&'a Pso, Vec<(usize, &'a Buf)>, usize, usize, usize);
 fn run(ctx: &MetalContext, jobs: &[DispatchJob<'_>], params: &IndexParams) {
     let cb = ctx.queue.commandBuffer().unwrap();
     let enc = cb.computeCommandEncoder().unwrap();
+
     for (pso, binds, pidx, grid, tg) in jobs {
         enc.setComputePipelineState(pso);
+
         for (i, b) in binds {
             unsafe { enc.setBuffer_offset_atIndex(Some(b), 0, *i) };
         }
+
         set_bytes(&enc, *pidx, params);
         enc.dispatchThreadgroups_threadsPerThreadgroup(
             MTLSize {
@@ -115,6 +136,7 @@ fn run(ctx: &MetalContext, jobs: &[DispatchJob<'_>], params: &IndexParams) {
             },
         );
     }
+
     enc.endEncoding();
     cb.commit();
     cb.waitUntilCompleted();
@@ -136,10 +158,12 @@ fn index_pipeline_matches_cpu() {
     let mut rng = Lcg(7);
     let mut ikc: Vec<f32> = (0..t_total * g.ihd).map(|_| rng.f()).collect();
     let iqk: Vec<f32> = (0..nb * qk_dim).map(|_| rng.f()).collect();
+
     for b in 0..nb {
         ikc[(base_pos + b) * g.ihd..(base_pos + b + 1) * g.ihd]
             .copy_from_slice(&iqk[b * qk_dim + g.inh * g.ihd..(b + 1) * qk_dim]);
     }
+
     let wq: Vec<bf16> = (0..g.ihd)
         .map(|_| bf16::from_f32(1.0 + 0.1 * rng.f()))
         .collect();
@@ -189,6 +213,7 @@ fn index_pipeline_matches_cpu() {
         vis_stride: vis_stride as u32,
         mask_words: mask_words as u32,
     };
+
     run(
         &ctx,
         &[
@@ -230,9 +255,11 @@ fn index_pipeline_matches_cpu() {
         ],
         &ip,
     );
+
     let vis: Vec<u32> = download(&vis_b, nb * vis_stride);
     let nvis: Vec<u32> = download(&nvis_b, nb);
     let vmask: Vec<u32> = download(&vmask_b, nb * mask_words);
+
     for b in 0..nb {
         let expect = select_ref(
             &g,
@@ -243,13 +270,17 @@ fn index_pipeline_matches_cpu() {
             &wk,
         );
         let got = &vis[b * vis_stride..b * vis_stride + nvis[b] as usize];
+
         assert_eq!(got.len(), expect.len(), "row {b}: visible count");
         assert_eq!(got, &expect[..], "row {b}: visible tokens");
+
         // The bitmask marks exactly the selected complete blocks.
         let blocks = (base_pos + b + 1) / g.ratio;
+
         for j in 0..blocks {
             let bit = (vmask[b * mask_words + j / 32] >> (j % 32)) & 1 == 1;
             let selected = expect.binary_search(&((j * g.ratio) as u32)).is_ok();
+
             assert_eq!(bit, selected, "row {b}: block {j} mask");
         }
     }
@@ -282,11 +313,14 @@ fn index_select_handles_ties() {
         })
         .collect();
     let mut order: Vec<usize> = (0..n).collect();
+
     order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]).then(a.cmp(&b)));
+
     let mut expect: Vec<u32> = order[..g.k]
         .iter()
         .flat_map(|&b| (b * g.ratio..(b + 1) * g.ratio).map(|t| t as u32))
         .collect();
+
     expect.extend((n * g.ratio..t_len).map(|t| t as u32));
     expect.sort_unstable();
 
@@ -316,6 +350,7 @@ fn index_select_handles_ties() {
         vis_stride: vis_stride as u32,
         mask_words: mask_words as u32,
     };
+
     run(
         &ctx,
         &[(
@@ -327,7 +362,9 @@ fn index_select_handles_ties() {
         )],
         &ip,
     );
+
     let nvis: Vec<u32> = download(&nvis_b, 1);
     let vis: Vec<u32> = download(&vis_b, nvis[0] as usize);
+
     assert_eq!(vis, expect);
 }

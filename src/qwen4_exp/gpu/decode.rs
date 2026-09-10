@@ -12,11 +12,14 @@ impl Gpu<'_> {
     /// so `mtp_draft` needs no round trip for the first draft.
     pub fn step_rows(&mut self, tokens: &[u32], snap: bool, fold_mtp: bool) -> Result<Vec<u32>> {
         let nb = tokens.len();
+
         anyhow::ensure!(
             !fold_mtp || self.mtp.is_some(),
             "folding the MTP pass needs the MTP head"
         );
+
         self.folded_mtp = None;
+
         anyhow::ensure!(
             (1..=MAX_NB).contains(&nb),
             "rows per step must be 1..={MAX_NB}"
@@ -26,29 +29,36 @@ impl Gpu<'_> {
             !snap || nb - 1 <= MAX_SNAP,
             "at most {MAX_SNAP} draft rows per verify step"
         );
+
         let t0 = std::time::Instant::now();
         let ngram0 = self.ngram_gather_s.get();
         let c = &self.p.cfg;
         let h = c.hidden_size as u32;
         let hh = c.hc_hidden();
+
         self.tokens.truncate(self.pos);
         self.tokens.extend_from_slice(tokens);
         self.ngram_prefetch_start(self.pos, nb);
+
         self.batch_pos = self.pos;
         self.batch_nb = nb;
         self.batch_snap = snap;
+
         unsafe {
             let ids = self.scratch.ids.contents().cast::<u32>().as_ptr();
+
             for (i, &t) in tokens.iter().enumerate() {
                 ids.add(IDS_IN + i).write(t);
             }
         }
+
         self.last_experts.clear();
         self.last_routes.clear();
         self.last_states.clear();
         self.last_route_w.clear();
         self.last_miss.clear();
         self.dispatch_count.set(0);
+
         self.step_no += 1;
         self.step_misses = 0;
         self.step_miss_bytes = 0;
@@ -64,9 +74,11 @@ impl Gpu<'_> {
 
         let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
         let mut enc = cb.computeCommandEncoder().context("encoder")?;
+
         {
             let s = &self.scratch;
             let (i0, nbu) = (IDS_IN as u32, nb as u32);
+
             self.dispatch(
                 &enc,
                 &self.pipes.embed_rows,
@@ -84,7 +96,9 @@ impl Gpu<'_> {
                 256,
                 false,
             );
+
             let gp = self.group_params(false, 0.0);
+
             self.dispatch(
                 &enc,
                 &self.pipes.replicate_b,
@@ -99,16 +113,21 @@ impl Gpu<'_> {
                 false,
             );
         }
+
         // A block's MoE output is injected by the next fused norm
         // (`pending`); only the PLE block needs it applied up front.
         let mut pending: Option<&Buf> = None;
         let mtp_fold = if fold_mtp { self.mtp.as_ref() } else { None };
+
         for li in 0..n_layers {
             let layer = &self.layers[li];
+
             self.encode_ple_before_block(&enc, layer, nb, pos, &mut pending)?;
+
             // The last trunk layer looks ahead into the MTP block (its
             // stream differs by the fold, an approximation like the rest).
             let la = self.lookahead_layer(li, n_layers, fold_mtp);
+
             self.encode_block(
                 &cb,
                 &mut enc,
@@ -122,8 +141,10 @@ impl Gpu<'_> {
                 la,
                 base + 4 * li as u64 + 1,
             )?;
+
             pending = Some(&self.scratch.moe_out);
         }
+
         self.head_b(
             &enc,
             &self.final_mixer,
@@ -134,11 +155,14 @@ impl Gpu<'_> {
             &self.scratch.logits,
             IDS_OUT,
         );
+
         if let Some(mtp) = mtp_fold {
             // Row b of the head pairs the trunk's residual at pos + b with
             // the trunk's argmax for it (written by the head just above).
             self.encode_mtp_prelude(&enc, mtp, nb, IDS_OUT, &self.scratch.hyper, 0);
+
             let slot_row = self.layers.len();
+
             self.encode_block(
                 &cb,
                 &mut enc,
@@ -163,6 +187,7 @@ impl Gpu<'_> {
                 IDS_MTP_OUT,
             );
         }
+
         enc.endEncoding();
         cb.commit();
 
@@ -177,6 +202,7 @@ impl Gpu<'_> {
         } else {
             None
         };
+
         for li in 0..n_layers {
             let record_layer = self.layers[li].moe.record_layer;
             let next = self
@@ -196,6 +222,7 @@ impl Gpu<'_> {
             la_total += total;
             la_issued += issued;
         }
+
         if let Some(record_layer) = mtp_record {
             let slot_row = self.layers.len();
             let (hits, total, _) = self.service_block(
@@ -211,8 +238,11 @@ impl Gpu<'_> {
             la_hits += hits;
             la_total += total;
         }
+
         cb.waitUntilCompleted();
+
         let gpu_s = cb.GPUEndTime() - cb.GPUStartTime();
+
         self.join_pending()?;
         self.join_inflight()?;
         self.gpu_ms.push(gpu_s * 1e3);
@@ -238,18 +268,22 @@ impl Gpu<'_> {
             std::mem::take(&mut self.last_route_w),
             std::mem::take(&mut self.last_miss),
         ));
+
         if self.dump_states {
             self.state_history
                 .push(std::mem::take(&mut self.last_states));
         }
+
         self.rows.push(nb);
         self.step_ms.push(t0.elapsed().as_secs_f64() * 1e3);
         self.ngram_ms
             .push((self.ngram_gather_s.get() - ngram0) * 1e3);
+
         if fold_mtp {
             self.folded_mtp =
                 Some(self.read_u32(&self.scratch.ids, IDS_MTP_OUT + nb)[IDS_MTP_OUT..].to_vec());
         }
+
         Ok(self.read_u32(&self.scratch.ids, IDS_OUT + nb)[IDS_OUT..].to_vec())
     }
 
@@ -265,9 +299,11 @@ impl Gpu<'_> {
         let Some(pl) = &layer.ple else {
             return Ok(());
         };
+
         if let Some(out) = pending.take() {
             self.inject_b(enc, &self.scratch.hyper, out, nb);
         }
+
         self.ple_b(enc, pl, nb, pos)
     }
 
@@ -277,19 +313,24 @@ impl Gpu<'_> {
         if !self.lookahead {
             return None;
         }
+
         if index + 1 < count {
             return Some(&self.layers[index + 1]);
         }
+
         if fold_mtp {
             return self.mtp.as_ref().map(|mtp| &mtp.layer);
         }
+
         None
     }
 
     /// One token, committed: the greedy next token.
     pub fn step(&mut self, token: u32) -> Result<u32> {
         let out = self.step_rows(&[token], false, false)?;
+
         self.commit(1)?;
+
         Ok(out[0])
     }
 }

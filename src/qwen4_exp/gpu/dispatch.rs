@@ -21,6 +21,7 @@ impl Gpu<'_> {
         enc.setComputePipelineState(pso);
         setup(enc);
         self.dispatch_count.set(self.dispatch_count.get() + 1);
+
         let g = MTLSize {
             width: grid,
             height: 1,
@@ -31,6 +32,7 @@ impl Gpu<'_> {
             height: 1,
             depth: 1,
         };
+
         if threadgroups {
             enc.dispatchThreadgroups_threadsPerThreadgroup(g, t);
         } else {
@@ -51,6 +53,7 @@ impl Gpu<'_> {
     ) {
         let n2 = in_dim / 2;
         let nbu = nb as u32;
+
         self.dispatch(
             enc,
             &self.pipes.prep_h,
@@ -75,6 +78,7 @@ impl Gpu<'_> {
             in_dim: q.inp,
         };
         let mut r0 = 0;
+
         while r0 < nb {
             let n = (nb - r0).min(8);
             let pipe = if n <= 3 {
@@ -86,6 +90,7 @@ impl Gpu<'_> {
             let x_off = r0 * (q.inp as usize / 2) * 2;
             let s_off = r0 * (q.inp as usize / 32) * 4;
             let y_off = r0 * q.out as usize * 4;
+
             self.dispatch(
                 enc,
                 pipe,
@@ -104,6 +109,7 @@ impl Gpu<'_> {
                 128,
                 true,
             );
+
             r0 += n;
         }
     }
@@ -138,11 +144,13 @@ impl Gpu<'_> {
 
     pub(super) fn read_u32(&self, buf: &Buf, n: usize) -> Vec<u32> {
         let ptr = buf.contents().cast::<u32>();
+
         unsafe { std::slice::from_raw_parts(ptr.as_ptr(), n) }.to_vec()
     }
 
     pub(super) fn read_f32(&self, buf: &Buf, n: usize) -> Vec<f32> {
         let ptr = buf.contents().cast::<f32>();
+
         unsafe { std::slice::from_raw_parts(ptr.as_ptr(), n) }.to_vec()
     }
 }

@@ -33,12 +33,15 @@ pub fn model() -> Result<PathBuf> {
 
 pub fn wait_for(mut check: impl FnMut() -> Result<bool>, timeout: Duration) -> Result<()> {
     let start = Instant::now();
+
     while start.elapsed() < timeout {
         if check()? {
             return Ok(());
         }
+
         std::thread::sleep(Duration::from_millis(50));
     }
+
     anyhow::bail!("server did not reach expected state within {timeout:?}")
 }
 
@@ -92,9 +95,12 @@ impl Server {
         let directory = tempfile::Builder::new()
             .prefix("cherenkov-smoke-")
             .tempdir_in("/private/tmp")?;
+
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+
         let model = model()?;
         let config = directory.path().join("server.toml");
+
         write_config(
             &config,
             &directory.path().join("control.sock"),
@@ -102,6 +108,7 @@ impl Server {
             4,
             &settings,
         )?;
+
         let log = fs::File::create(directory.path().join("server.log"))?;
         let process = ChildGuard(
             Command::new(binary())
@@ -118,6 +125,7 @@ impl Server {
             model,
             settings,
         };
+
         wait_for(
             || {
                 ensure!(
@@ -125,21 +133,27 @@ impl Server {
                     "server exited: {}",
                     fs::read_to_string(server.directory.path().join("server.log"))?
                 );
+
                 if !server.socket().exists() {
                     return Ok(false);
                 }
+
                 let stats = server.stats()?;
+
                 if stats["ready"] != true {
                     return Ok(false);
                 }
+
                 server.address = stats["http_address"]
                     .as_str()
                     .context("HTTP address")?
                     .to_owned();
+
                 Ok(true)
             },
             Duration::from_secs(180),
         )?;
+
         Ok(server)
     }
 
@@ -154,6 +168,7 @@ impl Server {
             .arg(self.socket())
             .output()?;
         let text = util::checked(output).with_context(|| format!("control command {args:?}"))?;
+
         serde_json::from_str(&text).context("control JSON")
     }
 
@@ -188,6 +203,7 @@ fn write_config(
         session_idle_seconds,
         queued_requests,
     } = settings;
+
     fs::write(
         path,
         format!(
@@ -214,6 +230,7 @@ no_eos = true
             serde_json::to_string(socket)?
         ),
     )?;
+
     Ok(())
 }
 
@@ -229,18 +246,22 @@ impl Response {
     }
     pub fn success(&self) -> Result<Value> {
         ensure!(self.status == 200, "HTTP {}: {}", self.status, self.body);
+
         self.json()
     }
 }
 
 pub fn request(address: &str, path: &str, body: Option<&Value>) -> Result<Response> {
     let mut stream = TcpStream::connect(address)?;
+
     stream.set_read_timeout(Some(Duration::from_secs(300)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+
     let data = body
         .map(serde_json::to_vec)
         .transpose()?
         .unwrap_or_default();
+
     write!(
         stream,
         "{} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -248,8 +269,11 @@ pub fn request(address: &str, path: &str, body: Option<&Value>) -> Result<Respon
         data.len()
     )?;
     stream.write_all(&data)?;
+
     let mut bytes = Vec::new();
+
     stream.read_to_end(&mut bytes)?;
+
     let response = String::from_utf8(bytes)?;
     let (headers, body) = response.split_once("\r\n\r\n").context("HTTP headers")?;
     let status = headers
@@ -257,6 +281,7 @@ pub fn request(address: &str, path: &str, body: Option<&Value>) -> Result<Respon
         .nth(1)
         .context("HTTP status")?
         .parse()?;
+
     Ok(Response {
         status,
         headers: headers.to_owned(),
@@ -266,9 +291,11 @@ pub fn request(address: &str, path: &str, body: Option<&Value>) -> Result<Respon
 
 pub fn complete(address: &str, prompt: &str, extra: Value) -> Result<Response> {
     let mut body = json!({"model":"cherenkov","prompt":prompt});
+
     body.as_object_mut()
         .unwrap()
         .extend(extra.as_object().context("request extras")?.clone());
+
     request(address, "/v1/completions", Some(&body))
 }
 
@@ -291,18 +318,25 @@ pub fn timed_command(mut command: Command, timeout: Duration) -> Result<String> 
             .spawn()?,
     );
     let start = Instant::now();
+
     loop {
         if let Some(status) = child.0.try_wait()? {
             use std::io::{Seek, SeekFrom};
+
             let (mut out, mut err) = (out, err);
+
             out.seek(SeekFrom::Start(0))?;
             err.seek(SeekFrom::Start(0))?;
+
             let (mut stdout, mut stderr) = (String::new(), String::new());
+
             out.read_to_string(&mut stdout)?;
             err.read_to_string(&mut stderr)?;
             ensure!(status.success(), "command failed: {stderr}");
+
             return Ok(stdout.trim().to_owned());
         }
+
         ensure!(start.elapsed() < timeout, "command timed out");
         std::thread::sleep(Duration::from_millis(100));
     }

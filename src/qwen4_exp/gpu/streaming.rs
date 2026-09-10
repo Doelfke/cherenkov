@@ -44,11 +44,14 @@ impl Gpu<'_> {
         if self.inflight.is_empty() {
             return Ok(());
         }
+
         let list = std::mem::take(&mut self.inflight);
         let rids: Vec<usize> = list.iter().map(|(_, r)| *r).collect();
+
         for (l, _) in &list {
             l.wait()?;
         }
+
         self.res.finish(&self.ctx, &rids)
     }
 
@@ -59,13 +62,18 @@ impl Gpu<'_> {
             return Ok(());
         };
         let t = std::time::Instant::now();
+
         if let Some(thread) = read.thread {
             let _ = thread.join();
         }
+
         self.step_read_s += t.elapsed().as_secs_f64();
         let t = std::time::Instant::now();
+
         self.res.finish(&self.ctx, &read.records)?;
+
         self.step_set_s += t.elapsed().as_secs_f64();
+
         Ok(())
     }
 
@@ -74,6 +82,7 @@ impl Gpu<'_> {
     /// at the next service. Returns records read.
     fn prefetch_async(&mut self, record_layer: usize, ids: &[u32]) -> Result<usize> {
         self.join_pending()?;
+
         let rids: Vec<usize> = ids
             .iter()
             .map(|&e| self.record_id(record_layer, e))
@@ -81,19 +90,24 @@ impl Gpu<'_> {
         let t_acq = std::time::Instant::now();
         let need = self.res.acquire(&self.ctx, &rids, self.step_no)?;
         self.step_set_s += t_acq.elapsed().as_secs_f64();
+
         if need.is_empty() {
             return Ok(0);
         }
+
         let (plan, warm) = self.res.plan_reads(&need);
         self.step_warm += warm;
         let n = plan.len();
+
         if self.fake_experts {
             self.pending = Some(PendingRead {
                 thread: None,
                 records: need,
             });
+
             return Ok(n);
         }
+
         let (cached, nocache) = (
             self.pool_file.try_clone().expect("dup experts fd"),
             self.pool_file_nocache.try_clone().expect("dup experts fd"),
@@ -102,6 +116,7 @@ impl Gpu<'_> {
             thread: Some(std::thread::spawn(move || plan.run(&cached, &nocache))),
             records: need,
         });
+
         Ok(n)
     }
 
@@ -110,13 +125,17 @@ impl Gpu<'_> {
         if !self.spin_wait {
             // Blocking avoids heating a CPU core on the fanless target machine.
             let ok = self.event.waitUntilSignaledValue_timeoutMS(ready, 30_000);
+
             anyhow::ensure!(
                 ok,
                 "GPU did not reach the router of slot row {slot_row} within 30 s"
             );
+
             return Ok(());
         }
+
         let started = std::time::Instant::now();
+
         while self.event.signaledValue() < ready {
             std::hint::spin_loop();
             anyhow::ensure!(
@@ -124,6 +143,7 @@ impl Gpu<'_> {
                 "GPU did not reach the router of slot row {slot_row} within 30 s"
             );
         }
+
         Ok(())
     }
 
@@ -138,17 +158,23 @@ impl Gpu<'_> {
         if !self.log_la {
             return;
         }
+
         let k = self.p.cfg.num_experts_per_tok;
+
         for &expert in experts {
             let (mut weight, mut rank) = (0.0f32, u32::MAX);
+
             for (i, &selected) in indices.iter().enumerate() {
                 if selected != expert {
                     continue;
                 }
+
                 weight = weight.max(weights[i]);
                 rank = rank.min((i % k) as u32);
             }
+
             let resident = self.res.is_member(self.record_id(record_layer, expert));
+
             self.la_pending.push(LaEntry {
                 step: self.step_no,
                 layer: slot_row,
@@ -184,13 +210,16 @@ impl Gpu<'_> {
         let s = &self.scratch;
         let event: &ProtocolObject<dyn objc2_metal::MTLEvent> =
             ProtocolObject::from_ref(&*self.event);
+
         self.hc_read_b(enc, &layer.attn_hc, nb, hyper, 0, pending, &s.hc, true);
+
         if !self.skips("mixer") {
             match &layer.mix {
                 Mix::Attn(a) => self.attention_b(enc, a, base_pos, nb),
                 Mix::Delta(d) => self.deltanet_b(enc, d, nb, snap_after),
             }
         }
+
         self.hc_read_b(
             enc,
             &layer.mlp_hc,
@@ -211,6 +240,7 @@ impl Gpu<'_> {
             &s.topk_w,
             self.p.cfg.num_experts_per_tok,
         );
+
         if let Some(next) = lookahead {
             // Approximate the next layer's routing on the current stream.
             self.hc_read_b(enc, &next.mlp_hc, nb, hyper, 0, None, &s.la, false);
@@ -225,18 +255,26 @@ impl Gpu<'_> {
                 self.p.cfg.num_experts_per_tok,
             );
         }
+
         enc.endEncoding();
         cb.encodeSignalEvent_value(event, signals.router_ready);
         cb.encodeWaitForEvent_value(event, signals.resident_ready);
+
         *enc = cb.computeCommandEncoder().context("encoder")?;
+
         self.experts_b(enc, &layer.moe, slot_row, nb, 0);
         enc.endEncoding();
+
         let event_res: &ProtocolObject<dyn objc2_metal::MTLEvent> =
             ProtocolObject::from_ref(&*self.event_res);
+
         cb.encodeSignalEvent_value(event_res, signals.resident_done);
         cb.encodeWaitForEvent_value(event, signals.misses_ready);
+
         *enc = cb.computeCommandEncoder().context("encoder")?;
+
         self.experts_b(enc, &layer.moe, slot_row, nb, 1);
+
         Ok(())
     }
 
@@ -245,12 +283,15 @@ impl Gpu<'_> {
         let Some(store) = self.low_bit_store else {
             return self.p.manifest.experts.record_stride as usize;
         };
+
         if !self.all_low_bits {
             let kind = if store.bits == 2 { 2 } else { 1 };
+
             for &rid in need {
                 self.res.set_kind(rid, kind);
             }
         }
+
         store.stride
     }
 
@@ -274,44 +315,57 @@ impl Gpu<'_> {
         // before), or the GPU finished the resident part (cut the weak
         // stragglers, wait for the strong ones).
         let mut cut_now = false;
+
         loop {
             if flags.iter().all(landed) {
                 break;
             }
+
             if self.event_res.signaledValue() >= resident_done {
                 cut_now = true;
+
                 break;
             }
+
             std::hint::spin_loop();
+
             if t.elapsed().as_secs() > 30 {
                 anyhow::bail!(
                     "GPU did not finish the resident experts of slot row {slot_row} within 30 s"
                 );
             }
         }
+
         if cut_now {
             let need_pos = |rid: usize| need.iter().position(|&r| r == rid).unwrap();
             let mut active_count = order.len();
             // Late entries sit at order[n_res..], strongest first.
             let mut u = order.len();
+
             while u > n_res {
                 let i = order[u - 1];
                 let f = &flags[need_pos(rids[i])];
+
                 if landed(f) {
                     break;
                 }
+
                 if wmax[i] < self.cut_w {
                     active_count -= 1;
                     self.step_cut += 1;
+
                     self.inflight.push((f.clone(), rids[i]));
+
                     u -= 1;
                 } else {
                     break;
                 }
             }
+
             for &i in &order[n_res..active_count] {
                 flags[need_pos(rids[i])].wait()?;
             }
+
             unsafe {
                 let tab = self
                     .slot_tab
@@ -319,10 +373,13 @@ impl Gpu<'_> {
                     .cast::<u64>()
                     .as_ptr()
                     .add(slot_row * SLOT_STRIDE);
+
                 tab.add(SLOT_STRIDE - 1).write(active_count as u64);
             }
         }
+
         self.step_read_s += t.elapsed().as_secs_f64();
+
         Ok(())
     }
 
@@ -336,12 +393,14 @@ impl Gpu<'_> {
         if !deadline {
             return self.res.finish(&self.ctx, need);
         }
+
         let landed: Vec<usize> = need
             .iter()
             .enumerate()
             .filter(|(j, _)| flags.is_empty() || flags[*j].done())
             .map(|(_, &r)| r)
             .collect();
+
         self.res.finish(&self.ctx, &landed)
     }
 
@@ -364,30 +423,40 @@ impl Gpu<'_> {
     ) -> Result<(usize, usize, usize)> {
         let signals = BlockSignals::new(seq);
         let k = self.p.cfg.num_experts_per_tok;
+
         self.wait_for_router(signals.router_ready, slot_row)?;
+
         let t0 = std::time::Instant::now();
         let idx = self.read_u32(&self.scratch.topk_idx, nb * k);
         let wts = self.read_f32(&self.scratch.topk_w, nb * k);
+
         if self.dump_states {
             // The GPU is stalled on the union, so this block's router
             // input is still in scratch.
             let h = self.p.cfg.hidden_size;
+
             self.last_states
                 .push((self.read_f32(&self.scratch.hc.mixed, h), idx[..k].to_vec()));
         }
+
         let union = union_of(&idx);
         let (mut hits, mut total) = (0, 0);
+
         if predicted.front().is_some_and(|(row, _)| *row == slot_row) {
             let (_, pred) = predicted.pop_front().unwrap();
             hits = union.iter().filter(|e| pred.contains(e)).count();
             total = union.len();
         }
+
         for mut e in self.la_pending.drain(..) {
             e.hit = union.contains(&e.expert);
+
             self.la_log.push(e);
         }
+
         // Records the previous layer read for this one join the set now.
         self.join_pending()?;
+
         let rids: Vec<usize> = union
             .iter()
             .map(|&e| self.record_id(record_layer, e))
@@ -411,12 +480,14 @@ impl Gpu<'_> {
             None
         } else if deadline {
             flags = plan.run_tracked(&self.pool_file, &self.pool_file_nocache, need.len());
+
             None
         } else {
             let (cached, nocache) = (
                 self.pool_file.try_clone().expect("dup experts fd"),
                 self.pool_file_nocache.try_clone().expect("dup experts fd"),
             );
+
             Some(std::thread::spawn(move || plan.run(&cached, &nocache)))
         };
         // Resident records first, then the ones being fetched, strongest
@@ -432,6 +503,7 @@ impl Gpu<'_> {
             })
             .collect();
         let mut order: Vec<usize> = (0..union.len()).collect();
+
         order.sort_by(|&a, &b| {
             missing[a].cmp(&missing[b]).then(
                 wmax[b]
@@ -439,11 +511,13 @@ impl Gpu<'_> {
                     .unwrap_or(std::cmp::Ordering::Equal),
             )
         });
+
         let n_res = missing.iter().filter(|m| !**m).count();
         let addrs: Vec<u64> = order
             .iter()
             .map(|&i| self.res.addr(&self.ctx, rids[i]))
             .collect::<Result<_>>()?;
+
         unsafe {
             let tab = self
                 .slot_tab
@@ -451,29 +525,37 @@ impl Gpu<'_> {
                 .cast::<u64>()
                 .as_ptr()
                 .add(slot_row * SLOT_STRIDE);
+
             for (u, &a) in addrs.iter().enumerate() {
                 tab.add(u).write(a);
             }
+
             tab.add(SLOT_STRIDE - 2).write(n_res as u64);
             tab.add(SLOT_STRIDE - 1).write(union.len() as u64);
+
             let wm = self
                 .wmap
                 .contents()
                 .cast::<f32>()
                 .as_ptr()
                 .add(slot_row * MAX_NB * SLOT_STRIDE);
+
             for b in 0..nb {
                 let row = wm.add(b * SLOT_STRIDE);
+
                 for (u, &i) in order.iter().enumerate() {
                     let e = union[i];
                     let w = (0..k)
                         .find(|&j| idx[b * k + j] == e)
                         .map_or(0.0, |j| wts[b * k + j]);
+
                     row.add(u).write(w);
                 }
             }
         }
+
         self.event.setSignaledValue(signals.resident_ready);
+
         // Deadline: when the resident part is done, cut the weak misses
         // that have not landed (from the weak end, as a truncation), wait
         // for the rest.
@@ -489,32 +571,46 @@ impl Gpu<'_> {
                 &wmax,
             )?;
         }
+
         // Required misses land before lookahead starts; the deadline policy
         // may leave cut reads in flight. Deferring prefetch measured 11%
         // faster by keeping that traffic off the critical reads.
         let mut issued = 0;
+
         {
             let t = std::time::Instant::now();
+
             if let Some(h) = miss_read {
                 let _ = h.join();
             }
+
             self.step_read_s += t.elapsed().as_secs_f64();
         }
+
         if let Some(next_layer) = lookahead {
             let lk = self.p.cfg.num_experts_per_tok;
             let la_idx = self.read_u32(&self.scratch.la_idx, nb * lk);
             let la_w = self.read_f32(&self.scratch.la_w, nb * lk);
             let la = union_of(&la_idx);
+
             self.log_lookahead(next_layer, slot_row + 1, &la, &la_idx, &la_w);
+
             issued = self.prefetch_async(next_layer, &la)?;
+
             predicted.push_back((slot_row + 1, la));
         }
+
         let t_fin = std::time::Instant::now();
+
         self.finish_miss_reads(&need, &flags, deadline)?;
+
         self.step_set_s += t_fin.elapsed().as_secs_f64();
         *io_s += ti.elapsed().as_secs_f64();
+
         self.event.setSignaledValue(signals.misses_ready);
+
         *turn_s += t0.elapsed().as_secs_f64();
+
         self.last_experts
             .push(order.iter().map(|&i| union[i]).collect());
         self.last_routes.push(idx);
@@ -525,6 +621,7 @@ impl Gpu<'_> {
                 .map(|i| union[i])
                 .collect(),
         );
+
         Ok((hits, total, issued))
     }
 }

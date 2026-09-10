@@ -105,6 +105,7 @@ impl Serve {
             Some(path) => Some(config::absolute(&path)?),
             None => {
                 let path = Paths::new(self.overrides.root.as_deref())?.config;
+
                 match std::fs::metadata(&path) {
                     Ok(_) => Some(path),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -124,6 +125,7 @@ impl Serve {
             .as_deref()
             .map(config::absolute)
             .transpose()?;
+
         Ok(Source {
             path,
             overrides: self.overrides,
@@ -133,12 +135,15 @@ impl Serve {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
     match cli.command {
         Some(Command::Serve(args)) => {
             let print = args.print_config;
             let source = args.source(cli.root)?;
+
             if print {
                 println!("{}", toml::to_string_pretty(&source.resolve()?)?);
+
                 Ok(())
             } else {
                 cherenkov::server::serve(source)
@@ -149,10 +154,12 @@ fn main() -> Result<()> {
                 &socket.unwrap_or_else(config::default_socket),
                 control::Command::Status,
             )?;
+
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let s = &result["stats"];
+
                 println!(
                     "{} | {} active, {} queued | {} completed, {} failed\n{} tokens | cache {} entries, {} bytes\nMetal {} bytes (last observation)",
                     if s["ready"] == true {
@@ -170,6 +177,7 @@ fn main() -> Result<()> {
                     s["memory"]["metal_allocated_bytes_observed"]
                 );
             }
+
             Ok(())
         }
         Some(Command::Config { action, socket }) => {
@@ -178,11 +186,14 @@ fn main() -> Result<()> {
                 ConfigAction::Reload => control::Command::ConfigReload,
             };
             let result = control::query(&socket.unwrap_or_else(config::default_socket), command)?;
+
             println!("{}", serde_json::to_string_pretty(&result)?);
+
             Ok(())
         }
         Some(Command::Paths) => {
             let paths = Paths::new(cli.root.as_deref())?;
+
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
@@ -190,6 +201,7 @@ fn main() -> Result<()> {
                     "default_model": paths.default_model(),
                 }))?
             );
+
             Ok(())
         }
         Some(Command::Download {
@@ -199,6 +211,7 @@ fn main() -> Result<()> {
             metadata_only,
         }) => {
             let paths = Paths::new(cli.root.as_deref())?;
+
             // SAFETY: download is a standalone command. No worker or transfer
             // threads have started; Xet reads this setting when its session starts.
             if std::env::var_os("HF_XET_CACHE").is_none() {
@@ -206,6 +219,7 @@ fn main() -> Result<()> {
                     std::env::set_var("HF_XET_CACHE", paths.scratch.join("xet"));
                 }
             }
+
             let model = download::run(
                 &paths,
                 download::Download {
@@ -215,7 +229,9 @@ fn main() -> Result<()> {
                     metadata_only,
                 },
             )?;
+
             println!("{}", model.display());
+
             Ok(())
         }
         Some(Command::Pack {
@@ -227,7 +243,9 @@ fn main() -> Result<()> {
                 Some(dir) => dir,
                 None => Paths::new(cli.root.as_deref())?.default_model(),
             };
+
             qwen4_exp::Qwen4ExpConfig::load(&model_dir)?;
+
             qwen4_exp::pack::prepare(&model_dir, output.as_deref(), &experts)
         }
         None => runner::run(

@@ -32,6 +32,7 @@ impl Registry {
         limit: usize,
     ) -> Result<Arc<Ticket>> {
         let id = requested.map(str::to_owned).unwrap_or_else(|| id("req"));
+
         ensure!(
             !id.is_empty()
                 && id.len() <= 80
@@ -40,7 +41,9 @@ impl Registry {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             "request_id must be 1..80 ASCII letters, digits, '-' or '_'"
         );
+
         let mut entries = self.entries.lock().unwrap();
+
         ensure!(
             !entries.contains_key(&id),
             Failure(409, "request_id is already active")
@@ -49,8 +52,11 @@ impl Registry {
             entries.len() < limit,
             Failure(503, "request capacity exhausted")
         );
+
         let flag = Arc::new(AtomicU8::new(LIVE));
+
         entries.insert(id.clone(), flag.clone());
+
         Ok(Arc::new(Ticket {
             id,
             flag,
@@ -63,6 +69,7 @@ impl Registry {
         let Some(flag) = entries.get(id) else {
             return false;
         };
+
         matches!(
             flag.compare_exchange(LIVE, CANCELLED, Ordering::AcqRel, Ordering::Acquire),
             Ok(_) | Err(CANCELLED)
@@ -72,7 +79,9 @@ impl Registry {
     pub(super) fn list(&self) -> Value {
         let entries = self.entries.lock().unwrap();
         let mut ids: Vec<_> = entries.keys().collect();
+
         ids.sort();
+
         let requests: Vec<_> = ids
             .into_iter()
             .map(|id| {
@@ -82,6 +91,7 @@ impl Registry {
                 })
             })
             .collect();
+
         json!({"object": "list", "data": requests})
     }
 }

@@ -21,6 +21,7 @@ impl ChatTokenizer {
         };
         let im_end = tok("<|im_end|>")?;
         let endoftext = tok("<|endoftext|>")?;
+
         Ok(ChatTokenizer {
             inner,
             template: crate::prompt::ChatTemplate::load(model_dir)?,
@@ -35,6 +36,7 @@ impl ChatTokenizer {
             .inner
             .encode(text, false)
             .map_err(|e| anyhow::anyhow!("encode: {e}"))?;
+
         Ok(enc.get_ids().to_vec())
     }
 

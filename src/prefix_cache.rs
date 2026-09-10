@@ -84,6 +84,7 @@ impl PrefixCache {
             + std::mem::size_of::<Entry>()
             + seed.drafts.len() * 4
             + seed.logits.as_ref().map_or(0, |l| l.len() * 4);
+
         if bytes > self.capacity || pos == 0 {
             return;
         }
@@ -95,12 +96,14 @@ impl PrefixCache {
         {
             self.used -= self.entries.remove(i).unwrap().bytes;
         }
+
         // Evict BEFORE copying state: allocation peaks also stay within the cache budget.
         while self.used + bytes > self.capacity || self.entries.len() >= self.max_entries {
             self.evict_oldest();
         }
 
         let following = drafting.then(|| ids.get(pos).copied().unwrap_or(seed.next));
+
         self.entries.push_back(Entry {
             tokens: ids[..pos].to_vec(),
             following,
@@ -113,6 +116,7 @@ impl PrefixCache {
             bytes,
             touched: Instant::now(),
         });
+
         self.used += bytes;
     }
 
@@ -124,9 +128,11 @@ impl PrefixCache {
         options: &Options,
     ) -> Result<Prefill> {
         self.expire();
+
         let drafting = options.effective_drafts() > 0;
         let mut cached = 0;
         let mut seed = PrefillResume::default();
+
         if let Some(i) = self
             .entries
             .iter()
@@ -139,16 +145,21 @@ impl PrefixCache {
         {
             let mut entry = self.entries.remove(i).unwrap();
             entry.touched = Instant::now();
+
             gpu.restore_prefix(&entry.state)?;
+
             cached = entry.tokens.len();
             seed = PrefillResume {
                 next: entry.next,
                 drafts: entry.drafts.clone(),
                 logits: Some(entry.logits.clone()),
             };
+
             self.entries.push_back(entry);
         }
+
         let mut boundaries = vec![ids.len()];
+
         if self.capacity > 0 {
             boundaries.extend(
                 stable_boundaries
@@ -156,12 +167,15 @@ impl PrefixCache {
                     .copied()
                     .filter(|&b| b > cached && b < ids.len()),
             );
+
             if ids.len() > 1 {
                 boundaries.push(ids.len() - 1);
             }
         }
+
         boundaries.sort_unstable();
         boundaries.dedup();
+
         Ok(Prefill {
             cached,
             boundaries,
@@ -218,10 +232,13 @@ impl Prefill {
             options.effective_drafts(),
             engine,
         )?;
+
         if gpu.pos == end || engine {
             cache.store(gpu, ids, &self.seed, options.effective_drafts() > 0);
         }
+
         gpu.prefill_release();
+
         Ok(gpu.pos == ids.len())
     }
 }
@@ -235,6 +252,7 @@ fn prefill_rows(
     engine: bool,
 ) -> Result<PrefillResume> {
     let last = following.is_none();
+
     if engine {
         let (next, draft) = gpu.prefill_chunk(rows, following, false)?;
         let mut seed = PrefillResume {
@@ -242,30 +260,40 @@ fn prefill_rows(
             drafts: Vec::new(),
             logits: Some(gpu.logits().to_vec()),
         };
+
         if drafts == 0 || !last {
             return Ok(seed);
         }
+
         seed.drafts.push(draft);
+
         if drafts >= 2 {
             seed.drafts.push(gpu.mtp_chain(draft)?);
         }
+
         return Ok(seed);
     }
 
     let result = gpu.step_rows(rows, false, false)?;
+
     gpu.commit(rows.len())?;
+
     let mut seed = PrefillResume {
         next: result[rows.len() - 1],
         drafts: Vec::new(),
         logits: Some(gpu.logits_row(rows.len() - 1).to_vec()),
     };
+
     if drafts == 0 {
         return Ok(seed);
     }
 
     let mut next = rows[1..].to_vec();
+
     next.push(following.unwrap_or(seed.next));
+
     seed.drafts = gpu.mtp_draft(&next, if last { drafts } else { 1 })?;
+
     Ok(seed)
 }
 

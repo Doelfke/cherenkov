@@ -20,6 +20,7 @@ impl FromStr for PoolBudget {
             "max" => return Ok(Self::Max),
             _ => {}
         }
+
         match s.parse::<f64>() {
             Ok(n) if n.is_finite() && n > 0.0 => Ok(Self::Gb(n)),
             _ => Err("pool must be a positive number of decimal GB, adaptive, or max".into()),
@@ -69,6 +70,7 @@ impl<'de> Deserialize<'de> for PoolBudget {
                 self.visit_f64(value as f64)
             }
         }
+
         deserializer.deserialize_any(PoolVisitor)
     }
 }
@@ -195,9 +197,11 @@ impl Options {
             self.max_tokens > 0 && self.max_ctx > 0 && self.repeat > 0,
             "token limits and repeat must be positive"
         );
+
         if let PoolBudget::Gb(n) = self.pool_gb {
             ensure!(n.is_finite() && n > 0.0, "invalid pool size");
         }
+
         Ok(())
     }
 }

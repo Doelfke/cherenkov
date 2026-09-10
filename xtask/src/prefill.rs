@@ -33,6 +33,7 @@ pub struct Options {
 
 fn precision(row: &Value) -> (u64, u64) {
     let bits = row["bits"].as_u64().unwrap_or(4);
+
     (bits, row["miss_bits"].as_u64().unwrap_or(bits))
 }
 
@@ -44,11 +45,13 @@ pub fn write_summary(out: &Path, report: &Value) -> Result<()> {
         .filter(|r| r["valid"] == true)
         .collect();
     let mut configurations = Vec::new();
+
     for r in &runs {
         if !configurations.contains(&precision(r)) {
             configurations.push(precision(r));
         }
     }
+
     let mut s = format!(
         "# Low-bit prefill comparison\n\n{} valid samples. Medians exclude loading and conversion.\n\n| Prompt tokens | Resident / miss bits | Before pp/s | After pp/s | Change | Pairs |\n| ---: | ---: | ---: | ---: | ---: | ---: |\n",
         runs.len()
@@ -58,7 +61,9 @@ pub fn write_summary(out: &Path, report: &Value) -> Result<()> {
         .context("prompts")?
         .keys()
         .collect();
+
     prompts.sort_by_key(|p| p.parse::<usize>().unwrap_or(usize::MAX));
+
     for prompt in prompts {
         for &(bits, miss) in &configurations {
             let selected: Vec<_> = runs
@@ -66,22 +71,28 @@ pub fn write_summary(out: &Path, report: &Value) -> Result<()> {
                 .filter(|r| r["prompt"] == *prompt && precision(r) == (bits, miss))
                 .copied()
                 .collect();
+
             append_median(&mut s, &selected, bits, miss)?;
         }
     }
+
     if let Some(notes) = report["notes"].as_array() {
         s.push('\n');
+
         for note in notes {
             writeln!(s, "{}", text(note))?;
         }
     }
+
     let controls: Vec<_> = runs
         .iter()
         .filter(|r| precision(r) == (4, 4) && r["binary"] == "before")
         .collect();
+
     if !controls.is_empty() {
         s.push_str("\n## Output checks\n\n");
     }
+
     for before in controls {
         let after = runs.iter().find(|r| {
             r["round"] == before["round"]
@@ -94,6 +105,7 @@ pub fn write_summary(out: &Path, report: &Value) -> Result<()> {
         };
         let same = fs::read(out.join(text(&before["output"])))?
             == fs::read(out.join(text(&after["output"])))?;
+
         writeln!(
             s,
             "- Round {}, {} tokens: Q4 output {}.",
@@ -102,10 +114,12 @@ pub fn write_summary(out: &Path, report: &Value) -> Result<()> {
             if same { "identical" } else { "DIFFERS" }
         )?;
     }
+
     s.push_str(
         "\nBinary hashes, timings, source and power readings are in [report.json](report.json).\n",
     );
     fs::write(out.join("README.md"), s)?;
+
     Ok(())
 }
 
@@ -117,9 +131,11 @@ fn append_median(s: &mut String, runs: &[&Value], bits: u64, miss: u64) -> Resul
             .collect::<Vec<_>>()
     };
     let (a, b) = (rates("before"), rates("after"));
+
     if a.is_empty() || b.is_empty() {
         return Ok(());
     }
+
     let pairs = a.len().min(b.len());
     let (a, b) = (median(a), median(b));
     let label = if bits == miss {
@@ -127,12 +143,14 @@ fn append_median(s: &mut String, runs: &[&Value], bits: u64, miss: u64) -> Resul
     } else {
         format!("{bits} / {miss}")
     };
+
     writeln!(
         s,
         "| {} | {label} | {a:.1} | {b:.1} | {:+.1}% | {pairs} |",
         runs[0]["metrics"]["prompt_tokens"],
         100.0 * (b / a - 1.0)
     )?;
+
     Ok(())
 }
 
@@ -196,13 +214,16 @@ impl Sample<'_> {
             "output": format!("{name}.txt"),
             "valid": false,
         });
+
         if let Err(error) = validate(&c, &mut row) {
             row["error"] = json!(error.to_string());
         }
+
         eprintln!(
             "{name}: {} pp/s, valid={}",
             row["metrics"]["pp_s"], row["valid"]
         );
+
         Ok(row)
     }
 }
@@ -212,8 +233,10 @@ fn validate(c: &capture::Captured, row: &mut Value) -> Result<()> {
         c.code == 0 && !c.timed_out && c.cycle.is_none(),
         "engine failed, timed out, or cycled"
     );
+
     let m = metrics::parse(&c.stderr)?;
     row["metrics"] = m.clone();
+
     ensure!(m["store_build_seconds"].is_null(), "sample built a store");
     ensure!(
         c.stable_power() && c.power_after["source"] == "ac",
@@ -227,7 +250,9 @@ fn validate(c: &capture::Captured, row: &mut Value) -> Result<()> {
         m["output_tokens"] == 8,
         "decode handoff did not emit eight tokens"
     );
+
     row["valid"] = json!(true);
+
     Ok(())
 }
 
@@ -242,14 +267,17 @@ pub fn run(options: Options) -> Result<()> {
         !options.out.join("report.json").exists(),
         "output already contains a report"
     );
+
     let before = options.before.canonicalize()?;
     let after = options.after.canonicalize()?;
     let mut prompts = json!({});
     let sentence = "The quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\n";
+
     for n in [4, 20, 128] {
         prompts[n.to_string()] =
             json!(sentence.repeat(n) + "\nSummarize this document in three sentences.");
     }
+
     let mut report = json!({
         "binaries": {
             "before": {"path": before, "sha256": util::digest(&before)?},
@@ -269,6 +297,7 @@ pub fn run(options: Options) -> Result<()> {
         ],
         "runs": [],
     });
+
     for round in 0..options.rounds {
         for length in [4, 20, 128] {
             for index in 0..options.configs.len() {
@@ -278,6 +307,7 @@ pub fn run(options: Options) -> Result<()> {
                 } else {
                     [("after", &after), ("before", &before)]
                 };
+
                 for (label, binary) in order {
                     let sample = Sample {
                         options: &options,
@@ -291,6 +321,7 @@ pub fn run(options: Options) -> Result<()> {
                     let row = sample.run()?;
                     let valid = row["valid"] == true;
                     let error = row["error"].clone();
+
                     append(&mut report, "runs", row);
                     util::write_json(&options.out.join("report.json"), &report)?;
                     write_summary(&options.out, &report)?;
@@ -299,5 +330,6 @@ pub fn run(options: Options) -> Result<()> {
             }
         }
     }
+
     Ok(())
 }

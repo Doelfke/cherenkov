@@ -80,8 +80,10 @@ impl ModelWeights {
             let index: IndexFile =
                 serde_json::from_slice(&bytes).context("parsing safetensors index")?;
             let mut names: Vec<String> = index.weight_map.into_values().collect();
+
             names.sort();
             names.dedup();
+
             names
         } else {
             vec!["model.safetensors".to_string()]
@@ -89,16 +91,19 @@ impl ModelWeights {
 
         let mut shards = Vec::with_capacity(shard_names.len());
         let mut tensors = HashMap::new();
+
         for (shard_idx, name) in shard_names.iter().enumerate() {
             let path = model_dir.join(name);
             let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
             // Weight files must remain unchanged while mapped.
             let mmap =
                 unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", path.display()))?;
+
             parse_header(&mmap, shard_idx, &mut tensors)
                 .with_context(|| format!("parsing header of {}", path.display()))?;
             shards.push(Shard { mmap });
         }
+
         Ok(ModelWeights { shards, tensors })
     }
 
@@ -119,28 +124,36 @@ fn parse_header(
     tensors: &mut HashMap<String, TensorInfo>,
 ) -> Result<()> {
     anyhow::ensure!(mmap.len() >= 8, "file too small for safetensors header");
+
     let header_len = u64::from_le_bytes(mmap[0..8].try_into().unwrap()) as usize;
+
     anyhow::ensure!(
         8 + header_len <= mmap.len(),
         "safetensors header length {header_len} exceeds file size"
     );
+
     let header: BTreeMap<String, serde_json::Value> =
         serde_json::from_slice(&mmap[8..8 + header_len]).context("header JSON")?;
     let data_start = 8 + header_len;
+
     for (name, value) in header {
         if name == "__metadata__" {
             continue;
         }
+
         let raw: RawTensor =
             serde_json::from_value(value).with_context(|| format!("tensor entry {name:?}"))?;
         let dtype = Dtype::parse(&raw.dtype)?;
         let nbytes = raw.data_offsets[1] - raw.data_offsets[0];
         let expected: usize = raw.shape.iter().product::<usize>() * dtype.size();
+
         anyhow::ensure!(
             nbytes == expected,
             "tensor {name:?}: byte span {nbytes} != shape-implied {expected}"
         );
+
         let offset = data_start + raw.data_offsets[0];
+
         anyhow::ensure!(
             offset + nbytes <= mmap.len(),
             "tensor {name:?} out of bounds"
@@ -156,5 +169,6 @@ fn parse_header(
             },
         );
     }
+
     Ok(())
 }

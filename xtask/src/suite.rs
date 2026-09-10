@@ -37,6 +37,7 @@ impl Case {
         if let Some(prompt) = &self.prompt {
             return prompt.clone();
         }
+
         self.repeat_text
             .as_deref()
             .unwrap_or("")
@@ -62,10 +63,12 @@ pub fn select<T: Clone>(
         return Ok(items.to_vec());
     };
     let mut seen = HashSet::new();
+
     selection
         .split(',')
         .map(|name| {
             ensure!(seen.insert(name), "repeated selection: {name}");
+
             items
                 .iter()
                 .find(|v| id(v) == name)
@@ -81,22 +84,27 @@ pub fn schedule(
     rounds: usize,
 ) -> Vec<(usize, usize, usize)> {
     let mut jobs = Vec::new();
+
     for round in 0..rounds {
         for (case_index, case) in cases.iter().enumerate() {
             if case.kind == "svg" || round >= case.rounds.unwrap_or(rounds) {
                 continue;
             }
+
             for index in 0..configs.len() {
                 jobs.push((round, (index + round) % configs.len(), case_index));
             }
         }
     }
+
     for (index, case) in cases.iter().enumerate() {
         if case.kind != "svg" {
             continue;
         }
+
         jobs.extend((0..configs.len()).map(|c| (0, c, index)));
     }
+
     jobs
 }
 
@@ -108,16 +116,21 @@ pub fn only_higher_caps(old: &Value, new: &Value) -> bool {
     let (Some(a), Some(b)) = (a.remove("cases"), b.remove("cases")) else {
         return false;
     };
+
     if old_other != new_other {
         return false;
     }
+
     let (Some(a), Some(b)) = (a.as_array(), b.as_array()) else {
         return false;
     };
+
     if a.len() != b.len() {
         return false;
     }
+
     let mut increased = false;
+
     for (a, b) in a.iter().zip(b) {
         let (mut a, mut b) = (a.clone(), b.clone());
         let (Some(a), Some(b)) = (a.as_object_mut(), b.as_object_mut()) else {
@@ -129,10 +142,13 @@ pub fn only_higher_caps(old: &Value, new: &Value) -> bool {
         ) else {
             return false;
         };
+
         if a != b || y < x {
             return false;
         }
+
         increased |= y > x;
     }
+
     increased
 }

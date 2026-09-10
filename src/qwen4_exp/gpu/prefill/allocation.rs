@@ -21,6 +21,7 @@ impl Gpu<'_> {
         let n_rep = c.num_attention_heads / c.num_key_value_heads;
         let f = |n: usize| ctx.new_buffer(n * 4);
         let hf = |n: usize| ctx.new_buffer(n * 2);
+
         Ok(PrefillScratch {
             rows: rp,
             ids: ctx.new_buffer(rp * 4)?,
@@ -81,6 +82,7 @@ impl Gpu<'_> {
     /// free), between 512 and 4,096.
     pub fn prefill_rows_fit(&self) -> usize {
         use objc2_metal::MTLDevice as _;
+
         let device_limit = self.ctx.device.recommendedMaxWorkingSetSize() as usize;
         let limit = self
             .ctx
@@ -90,6 +92,7 @@ impl Gpu<'_> {
             .min(device_limit) as f64;
         let used = self.ctx.device.currentAllocatedSize() as f64;
         let rows = ((limit - used - BYTES_PER_GB as f64) / ROW_BYTES as f64).max(0.0) as usize;
+
         (rows / 256 * 256).clamp(512, 4096)
     }
 }

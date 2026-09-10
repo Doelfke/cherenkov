@@ -47,13 +47,16 @@ fn set_caps(cases: &mut [Case], overrides: &[String]) -> Result<()> {
             .split_once('=')
             .context("--case-cap requires ID=TOKENS")?;
         let limit = limit.parse()?;
+
         ensure!(limit > 0, "token cap must be positive");
+
         cases
             .iter_mut()
             .find(|c| c.id == id)
             .with_context(|| format!("unknown case: {id}"))?
             .max_tokens = limit;
     }
+
     Ok(())
 }
 
@@ -62,27 +65,34 @@ fn check_stores(model: &Path, configs: &[Configuration], allow_build: bool) -> R
         model.join("packed/manifest.json").exists(),
         "model must already be packed"
     );
+
     for config in configs {
         let Some(bits) = config.store_bits else {
             continue;
         };
         let present = model.join(format!("packed/experts{bits}.bin")).exists()
             && model.join(format!("packed/manifest{bits}.json")).exists();
+
         ensure!(
             present || allow_build,
             "{bits}-bit store missing; select cached configurations or pass --build-stores"
         );
+
         if !present {
             eprintln!("Allowing first-use {bits}-bit construction, reported in load time.");
         }
     }
+
     Ok(())
 }
 
 pub fn raise_saved_caps(out: &Path, report: &mut Value, signature: Value) -> Result<()> {
     let revision = json!({"previous_signature":report["signature"],"utc_changed":util::utc()?,"reason":"Raised answer safety caps; prompts, context, binary, and model unchanged."});
+
     append(report, "suite_revisions", revision);
+
     let runs = std::mem::take(report["runs"].as_array_mut().context("report runs")?);
+
     for mut record in runs {
         let args = record["args"].as_array().context("sample args")?;
         let pos = args
@@ -101,24 +111,32 @@ pub fn raise_saved_caps(out: &Path, report: &mut Value, signature: Value) -> Res
             .context("case missing")?["max_tokens"]
             .as_u64()
             .context("token cap")?;
+
         if record["status"] != "incomplete" || cap <= old_cap {
             append(report, "runs", record);
+
             continue;
         }
+
         let archive = format!(
             "attempts/{}-cap-{old_cap}.txt",
             record["id"].as_str().context("sample id")?
         );
+
         fs::create_dir_all(out.join("attempts"))?;
         fs::rename(
             out.join(record["output"].as_str().context("sample output")?),
             out.join(&archive),
         )?;
+
         record["output"] = json!(archive);
+
         append(report, "previous_attempts", record);
     }
+
     report["cases"] = signature["cases"].clone();
     report["signature"] = signature;
+
     Ok(())
 }
 
@@ -143,11 +161,13 @@ fn record_result(
 ) -> Result<()> {
     if let Some(cycle) = &capture.cycle {
         record["status"] = json!("cycling");
+
         anyhow::bail!(
             "stopped after four repeated word blocks: {}",
             cycle["example"]
         );
     }
+
     ensure!(
         capture.code == 0,
         "engine exited {}: {}",
@@ -162,8 +182,10 @@ fn record_result(
             .rev()
             .collect::<String>()
     );
+
     let m = metrics::parse(&capture.stderr)?;
     record["metrics"] = m.clone();
+
     ensure!(
         m["metal_gb"].as_f64().unwrap() <= 25.0,
         "reported Metal allocations exceeded 25 GB"
@@ -176,31 +198,40 @@ fn record_result(
         allow_build || m["store_build_seconds"].is_null(),
         "unexpected store construction; use --build-stores"
     );
+
     let reason = if m["output_tokens"].as_u64().unwrap() >= case.max_tokens as u64 {
         "length"
     } else {
         "eos"
     };
     record["finish_reason"] = json!(reason);
+
     if case.stop == "eos" && reason != "eos" {
         record["status"] = json!("incomplete");
+
         anyhow::bail!("incomplete answer: reached the token safety cap before EOS");
     }
+
     ensure!(
         case.stop != "length" || reason == "length",
         "fixed-length decode did not reach its token count"
     );
+
     if case.kind == "svg" {
         record["status"] = json!("invalid_svg");
         let text = fs::read_to_string(out.join(record["output"].as_str().unwrap()))?;
         let (svg, elements) = metrics::extract_svg(&text)?;
         let path = format!("pelicans/{}.svg", config.id);
+
         fs::write(out.join(&path), format!("{svg}\n"))?;
+
         record["svg"] = json!(path);
         record["svg_elements"] = json!(elements);
         record["within_element_budget"] = json!(elements <= 120);
     }
+
     record["status"] = json!("ok");
+
     Ok(())
 }
 
@@ -221,6 +252,7 @@ impl Run<'_> {
             self.model.display().to_string(),
             case.prompt(),
         ];
+
         args.extend(config.args.clone());
         args.extend([
             "--max-tokens".into(),
@@ -228,10 +260,13 @@ impl Run<'_> {
             "--max-ctx".into(),
             case.max_ctx.unwrap_or(self.max_ctx).to_string(),
         ]);
+
         if case.stop == "length" {
             args.push("--no-eos".into());
         }
+
         eprintln!("[{id}] starting");
+
         let present = config
             .store_bits
             .is_none_or(|b| self.model.join(format!("packed/experts{b}.bin")).exists());
@@ -256,9 +291,11 @@ impl Run<'_> {
             "wall_seconds": c.wall_seconds,
             "exit_code": c.code,
         });
+
         if let Some(cycle) = &c.cycle {
             record["cycle"] = cycle.clone();
         }
+
         if let Err(error) = record_result(
             self.out,
             config,
@@ -269,10 +306,12 @@ impl Run<'_> {
         ) {
             record["error"] = json!(error.to_string());
         }
+
         eprintln!(
             "[{id}] {}, tg/s {}",
             record["status"], record["metrics"]["tg_s"]
         );
+
         Ok(record)
     }
 }
@@ -285,6 +324,7 @@ fn new_report(
     model: &Path,
 ) -> Result<Value> {
     let status = util::output(&["git", "status", "--porcelain"])?;
+
     Ok(json!({
         "version": 1,
         "signature": signature,
@@ -315,13 +355,18 @@ pub fn run(options: Options) -> Result<()> {
     let suite: Suite = serde_json::from_value(util::json(&options.suite)?)?;
     let configs = suite::select(&suite.configurations, options.configs.as_deref(), |c| &c.id)?;
     let mut cases = suite::select(&suite.cases, options.cases.as_deref(), |c| &c.id)?;
+
     set_caps(&mut cases, &options.case_cap)?;
+
     let rounds = options.rounds.unwrap_or(suite.rounds);
+
     ensure!(
         rounds > 0 && !configs.is_empty() && !cases.is_empty(),
         "rounds and selections must be nonempty"
     );
+
     let jobs = suite::schedule(&configs, &cases, rounds);
+
     if options.dry_run {
         let plan: Vec<_> = jobs
             .iter()
@@ -334,14 +379,20 @@ pub fn run(options: Options) -> Result<()> {
                 })
             })
             .collect();
+
         println!("{}", serde_json::to_string_pretty(&plan)?);
+
         return Ok(());
     }
+
     let model = options.model_dir.canonicalize()?;
+
     check_stores(&model, &configs, options.build_stores)?;
+
     if options.binary.is_none() {
         util::build()?;
     }
+
     let binary = options
         .binary
         .clone()
@@ -354,9 +405,11 @@ pub fn run(options: Options) -> Result<()> {
             .unwrap_or(util::root().join("results").join(util::utc()?)),
     )?;
     let mut metadata = json!({});
+
     for name in ["config.json", "tokenizer.json", "packed/manifest.json"] {
         metadata[name] = json!(util::digest(&model.join(name))?);
     }
+
     let signature = json!({
         "model_metadata_sha256": metadata,
         "binary_sha256": util::digest(&binary)?,
@@ -368,9 +421,11 @@ pub fn run(options: Options) -> Result<()> {
         "allow_battery": options.allow_battery,
     });
     let mut report = prepare_report(&out, &options, signature, &configs, &cases, &binary, &model)?;
+
     fs::create_dir_all(out.join("outputs"))?;
     fs::create_dir_all(out.join("pelicans"))?;
     report::write(&out, &report)?;
+
     let runner = Run {
         binary: &binary,
         model: &model,
@@ -378,8 +433,10 @@ pub fn run(options: Options) -> Result<()> {
         options: &options,
         max_ctx: suite.max_ctx,
     };
+
     for (r, c, t) in jobs {
         let id = format!("r{}-{}-{}", r + 1, cases[t].id, configs[c].id);
+
         if report["runs"].as_array().unwrap().iter().any(|v| {
             v["id"] == id
                 && matches!(
@@ -389,9 +446,11 @@ pub fn run(options: Options) -> Result<()> {
         }) {
             continue;
         }
+
         let record = runner.sample(&configs[c], &cases[t], r)?;
         let failed = record["status"] == "failed";
         let error = record["error"].clone();
+
         report["runs"]
             .as_array_mut()
             .unwrap()
@@ -404,12 +463,17 @@ pub fn run(options: Options) -> Result<()> {
             out.display()
         );
     }
+
     report["utc_finished"] = json!(util::utc()?);
+
     report::write(&out, &report)?;
+
     if options.update_readme {
         crate::readme::update(&out)?;
     }
+
     println!("{}", out.join("gallery.html").display());
+
     Ok(())
 }
 
@@ -424,6 +488,7 @@ fn prepare_report(
 ) -> Result<Value> {
     if options.resume {
         let mut report = util::json(&out.join("report.json"))?;
+
         if report["signature"] != signature {
             ensure!(
                 suite::only_higher_caps(&report["signature"], &signature),
@@ -431,12 +496,15 @@ fn prepare_report(
             );
             raise_saved_caps(out, &mut report, signature)?;
         }
+
         return Ok(report);
     }
+
     ensure!(
         !out.exists() || fs::read_dir(out)?.next().is_none(),
         "output directory is not empty; choose another or --resume"
     );
     fs::create_dir_all(out)?;
+
     new_report(signature, configs, cases, binary, model)
 }

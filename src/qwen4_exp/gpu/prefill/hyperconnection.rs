@@ -6,6 +6,7 @@ impl Gpu<'_> {
     pub(super) fn pf_inject(&self, enc: &Enc, hyper: &Buf, out: &Buf, inj: &Buf, t: usize) {
         let gp = self.group_params(false, 0.0);
         let nbu = t as u32;
+
         self.dispatch(
             enc,
             &self.pipes.inject_b,
@@ -36,9 +37,11 @@ impl Gpu<'_> {
     ) {
         let c = &self.p.cfg;
         let h = c.hidden_size as u32;
+
         if let Some(out) = pending {
             self.pf_inject(enc, hyper, out, &pf.inj, t);
         }
+
         self.group_norm_b(
             enc,
             hyper,
@@ -51,8 +54,10 @@ impl Gpu<'_> {
             t,
         );
         self.qmm(enc, &hc.down, &pf.normed, &pf.d, t);
+
         let n = (t as u32) * hc.down.out;
         let div = c.hc_count as f32;
+
         self.dispatch(
             enc,
             &self.pipes.silu_rows,
@@ -66,11 +71,14 @@ impl Gpu<'_> {
             false,
         );
         self.qmm(enc, &hc.up, &pf.d, &pf.u, t);
+
         if inject && let Some(q) = &hc.inject {
             self.qmm(enc, q, &pf.normed, &pf.inj, t);
         }
+
         let gp = self.group_params(false, 0.0);
         let nbu = t as u32;
+
         self.dispatch(
             enc,
             &self.pipes.hc_mix_b,

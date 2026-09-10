@@ -22,12 +22,16 @@ impl Gpu<'_> {
         let Some(pl) = self.layers.iter().find_map(|l| l.ple.as_ref()) else {
             return;
         };
+
         self.ngram_prefetch_join();
+
         let mut ids: Vec<u64> = (t0..t0 + n)
             .flat_map(|t| self.ngram_ids_at(pl, t))
             .collect();
+
         ids.sort_unstable();
         ids.dedup();
+
         let row_bytes = self.p.manifest.ngram.row_bytes;
         let file = self.ngram_file.try_clone().expect("dup ngram fd");
         let h = std::thread::spawn(move || prefetch_ngram_rows(&file, &ids, row_bytes));
@@ -55,24 +59,32 @@ impl Gpu<'_> {
             )
         };
         let t_gather = std::time::Instant::now();
+
         self.ngram_prefetch_join();
+
         for b in 0..nb {
             let ids = self.ngram_ids_at(pl, base_pos + b);
+
             anyhow::ensure!(
                 ids.len() * dim == c.ple_embed_dim,
                 "n-gram head layout mismatch"
             );
+
             let eb = &mut e[b * c.ple_embed_dim..(b + 1) * c.ple_embed_dim];
+
             for (hi, &id) in ids.iter().enumerate() {
                 self.p.ngram_row(id, &mut eb[hi * dim..(hi + 1) * dim]);
             }
         }
+
         self.ngram_gather_s
             .set(self.ngram_gather_s.get() + t_gather.elapsed().as_secs_f64());
         self.prep_h(enc, &pl.e, 0, c.ple_embed_dim as u32, nb, &s.hc.h1);
         self.qmv_h(enc, &pl.key, &s.ple_key, nb, &s.hc.h1);
         self.qmv_h(enc, &pl.value, &s.ple_value, nb, &s.hc.h1);
+
         let groups = c.hc_count as u32;
+
         self.group_norm_b(
             enc,
             &s.ple_key,
@@ -95,7 +107,9 @@ impl Gpu<'_> {
             0.0,
             nb,
         );
+
         let gp = self.group_params(true, 0.0);
+
         self.dispatch(
             enc,
             &self.pipes.ple_gate_b,
@@ -121,6 +135,7 @@ impl Gpu<'_> {
             0.0,
             nb,
         );
+
         let cp = PleConvParams {
             channels: hh as u32,
             ksize: pl.kernel,
@@ -129,6 +144,7 @@ impl Gpu<'_> {
             filled: base_pos as u32,
             nb: nb as u32,
         };
+
         self.dispatch(
             enc,
             &self.pipes.ple_conv_b,
@@ -145,6 +161,7 @@ impl Gpu<'_> {
             false,
         );
         self.add(enc, &s.hyper, &s.ple_out, nb * hh);
+
         Ok(())
     }
 }
@@ -152,18 +169,24 @@ impl Gpu<'_> {
 /// Touch each selected row once; workers claim disjoint indices from the queue.
 fn prefetch_ngram_rows(file: &std::fs::File, ids: &[u64], row_bytes: u64) {
     use std::os::unix::fs::FileExt as _;
+
     use std::sync::atomic::{AtomicUsize, Ordering};
+
     let next = AtomicUsize::new(0);
     let workers = 16.min(ids.len().max(1));
+
     std::thread::scope(|s| {
         for _ in 0..workers {
             s.spawn(|| {
                 let mut buf = [0u8; 256];
+
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
+
                     if i >= ids.len() {
                         break;
                     }
+
                     let _ = file.read_at(&mut buf[..row_bytes as usize], ids[i] * row_bytes);
                 }
             });

@@ -48,13 +48,16 @@ enum Smoke {
 
 fn check_metal() -> Result<()> {
     let mut failed = false;
+
     for (name, source) in [
         ("FORWARD_MSL", kernels::FORWARD_MSL),
         ("BATCH_MSL", kernels::BATCH_MSL),
         ("CLOCK_PROBE_MSL", kernels::CLOCK_PROBE_MSL),
     ] {
         let mut input = tempfile::NamedTempFile::new()?;
+
         input.write_all(source.as_bytes())?;
+
         let child = util::command(&[
             "xcrun",
             "-sdk",
@@ -70,6 +73,7 @@ fn check_metal() -> Result<()> {
         .stderr(Stdio::piped())
         .spawn()?;
         let output = child.wait_with_output()?;
+
         println!(
             "{} {name}",
             if output.status.success() {
@@ -78,20 +82,26 @@ fn check_metal() -> Result<()> {
                 "FAIL"
             }
         );
+
         failed |= !output.status.success();
+
         print_diagnostics(&String::from_utf8_lossy(&output.stderr));
     }
+
     ensure!(!failed, "Metal syntax check failed");
+
     Ok(())
 }
 
 fn print_diagnostics(stderr: &str) {
     let mut seen = HashSet::new();
     let mut keep = true;
+
     for line in stderr.lines() {
         if line.contains(": error:") || line.contains(": warning:") {
             keep = seen.insert(line);
         }
+
         if keep {
             eprintln!("{line}");
         }
@@ -102,6 +112,7 @@ fn smoke(kind: Smoke, model: Option<PathBuf>, binary: Option<PathBuf>) -> Result
     if binary.is_none() {
         util::build()?;
     }
+
     let mut command = util::command(&["cargo", "test", "-p", "xtask", "--test", "smoke"]);
     let name = match kind {
         Smoke::All => None,
@@ -110,17 +121,23 @@ fn smoke(kind: Smoke, model: Option<PathBuf>, binary: Option<PathBuf>) -> Result
         Smoke::Sessions => Some("concurrency::"),
         Smoke::Download => Some("download_smoke"),
     };
+
     if let Some(name) = name {
         command.arg(name);
     }
+
     command.args(["--", "--ignored", "--test-threads=1", "--nocapture"]);
+
     if let Some(model) = model {
         command.env("CHERENKOV_MODEL_DIR", model.canonicalize()?);
     }
+
     if let Some(binary) = binary {
         command.env("CHERENKOV_BINARY", binary.canonicalize()?);
     }
+
     ensure!(command.status()?.success(), "smoke tests failed");
+
     Ok(())
 }
 
@@ -128,14 +145,17 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Task::Bench(options) => {
             xtask::capture::install_interrupt_handler()?;
+
             bench::run(options)
         }
         Task::Prefill(options) => {
             xtask::capture::install_interrupt_handler()?;
+
             prefill::run(options)
         }
         Task::Summarize { directory } => {
             let data = util::json(&directory.join("report.json"))?;
+
             if data.get("prompts").is_some() {
                 prefill::write_summary(&directory, &data)
             } else {

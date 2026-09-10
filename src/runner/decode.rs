@@ -42,9 +42,11 @@ impl Decode {
                 seed.logits.as_ref().map_or(0, Vec::len),
             )?)
         };
+
         if let (Some(sampler), Some(rng)) = (&mut sampler, rng) {
             sampler.set_rng(rng);
         }
+
         let cur = match &mut sampler {
             Some(s) => s.sample(
                 seed.logits
@@ -53,6 +55,7 @@ impl Decode {
             )?,
             None => seed.next,
         };
+
         Ok(Self {
             cur,
             drafts: seed.drafts,
@@ -73,9 +76,11 @@ impl Decode {
 
     fn emit(&mut self, token: u32, emit: &mut dyn FnMut(u32) -> Result<()>) -> Result<()> {
         self.tokens.push(token);
+
         if let Some(sampler) = &mut self.sampler {
             sampler.accept(token)?;
         }
+
         emit(token)
     }
 
@@ -90,29 +95,41 @@ impl Decode {
         if self.finish_reason.is_some() {
             return Ok(());
         }
+
         if self.is_eos(self.cur) {
             self.finish_reason = Some("stop");
+
             return Ok(());
         }
+
         if self.tokens.len() >= self.limit {
             self.finish_reason = Some("length");
+
             return Ok(());
         }
+
         let mut rows = vec![self.cur];
         let remaining = self.limit - self.tokens.len() - 1;
+
         rows.extend(self.drafts.iter().take(self.n_draft.min(remaining)));
         self.emit(self.cur, emit)?;
+
         let pos = gpu.pos;
         let result = gpu.step_rows(&rows, rows.len() > 1, self.n_draft > 0)?;
         let mut n = 1;
+
         while n < rows.len() && result[n - 1] == rows[n] && !self.is_eos(rows[n]) {
             n += 1;
         }
+
         gpu.commit(n)?;
+
         self.steps += 1;
         self.accepted += n - 1;
         let mut next = rows[1..n].to_vec();
+
         next.push(result[n - 1]);
+
         if self.n_draft > 0 {
             let chain = if self.n_draft >= 2 && n < rows.len() {
                 1
@@ -121,6 +138,7 @@ impl Decode {
             };
             self.drafts = gpu.mtp_draft(&next, chain)?;
         }
+
         if let (Some(model), Some(state)) = (cpu, cpu_state) {
             qwen4_exp_check_rows(
                 model,
@@ -133,17 +151,22 @@ impl Decode {
                 false,
             )?;
         }
+
         for &token in &rows[1..n] {
             self.emit(token, emit)?;
         }
+
         if self.tokens.len() == self.limit {
             self.finish_reason = Some("length");
+
             return Ok(());
         }
+
         self.cur = match &mut self.sampler {
             Some(sampler) => sampler.sample(gpu.logits_row(n - 1))?,
             None => result[n - 1],
         };
+
         Ok(())
     }
 }

@@ -13,6 +13,7 @@ pub(in crate::server) fn new_session(
     let id = store
         .create(&settings, config)
         .expect("create test session");
+
     (Arc::new(Mutex::new(store)), id)
 }
 

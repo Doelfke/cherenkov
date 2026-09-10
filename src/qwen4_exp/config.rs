@@ -88,21 +88,27 @@ impl Qwen4ExpConfig {
         let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
         let root: serde_json::Value = serde_json::from_slice(&bytes).context("config.json")?;
         let model_type = root["model_type"].as_str().context("model_type missing")?;
+
         anyhow::ensure!(
             matches!(model_type, "qwen4_exp" | "qwen4_exp_text"),
             "unsupported model_type {model_type}; expected qwen4_exp"
         );
+
         let text = root.get("text_config").cloned().unwrap_or(root);
+
         anyhow::ensure!(
             text["model_type"] == "qwen4_exp_text",
             "expected qwen4_exp_text configuration"
         );
+
         let cfg: Qwen4ExpConfig = serde_json::from_value(text).context("text_config")?;
+
         anyhow::ensure!(
             cfg.layer_types.len() == cfg.num_hidden_layers,
             "layer_types length mismatch"
         );
         anyhow::ensure!(cfg.hc_count > 1, "hc_count must exceed 1");
+
         Ok(cfg)
     }
 

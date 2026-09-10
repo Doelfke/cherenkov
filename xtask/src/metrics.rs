@@ -7,6 +7,7 @@ fn fields(text: &str, label: &str, pattern: &str) -> Result<Vec<f64>> {
     let captures = regex
         .captures(text)
         .with_context(|| format!("incomplete engine telemetry: {label}"))?;
+
     captures
         .iter()
         .skip(1)
@@ -35,6 +36,7 @@ pub fn parse(text: &str) -> Result<Value> {
         r"built the [23]-bit store in ([\d.]+)s",
     )
     .ok();
+
     Ok(json!({
         "store_build_seconds":build.map(|v|v[0]), "load_seconds":load[0], "clock_start_ms":load[1],
         "prompt_tokens":prefill[0] as u64, "prefill_seconds":prefill[1], "pp_s":prefill[2],
@@ -51,10 +53,12 @@ pub fn extract_svg(text: &str) -> Result<(&str, usize)> {
         .context("no complete SVG: output may have hit its token limit")?
         .as_str();
     let document = roxmltree::Document::parse(svg)?;
+
     anyhow::ensure!(
         document.root_element().tag_name().name() == "svg",
         "root element is not svg"
     );
+
     Ok((
         svg,
         document.descendants().filter(|n| n.is_element()).count(),
@@ -63,15 +67,19 @@ pub fn extract_svg(text: &str) -> Result<(&str, usize)> {
 
 pub fn repeated_tail(text: &str) -> Option<Value> {
     let mut words: Vec<&str> = text.split_whitespace().rev().skip(1).take(4096).collect();
+
     words.reverse();
+
     for period in 32..=512.min(words.len() / 4) {
         let tail = &words[words.len() - 4 * period..];
         let block = &words[words.len() - period..];
+
         if tail.chunks_exact(period).all(|chunk| chunk == block) {
             return Some(
                 json!({"words_per_cycle":period,"repetitions":4,"example":block.join(" ").chars().take(240).collect::<String>()}),
             );
         }
     }
+
     None
 }

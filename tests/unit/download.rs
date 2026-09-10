@@ -3,7 +3,9 @@ use super::*;
 #[test]
 fn index_selects_unique_weight_files_and_rejects_unsafe_paths() {
     let files = shards(br#"{"weight_map":{"a":"model-1.safetensors","b":"model-1.safetensors","c":"model-2.safetensors"}}"#).unwrap();
+
     assert_eq!(files.len(), 2);
+
     for name in [
         "../secret.safetensors",
         "/weights.safetensors",
@@ -11,8 +13,10 @@ fn index_selects_unique_weight_files_and_rejects_unsafe_paths() {
         "model.bin",
     ] {
         let bytes = serde_json::to_vec(&serde_json::json!({"weight_map":{"a":name}})).unwrap();
+
         assert!(shards(&bytes).is_err());
     }
+
     assert!(shards(br#"{"weight_map":{}}"#).is_err());
 }
 
@@ -21,6 +25,7 @@ fn cache_accounting_requires_complete_files_at_expected_sizes() {
     let dir = tempfile::tempdir().unwrap();
     let files = BTreeSet::from(["a".into(), "b".into()]);
     let available = BTreeMap::from([("a".into(), 5), ("b".into(), 7)]);
+
     assert_eq!(missing_bytes(&files, &available, dir.path()).unwrap(), 12);
     std::fs::write(dir.path().join("a"), b"12345").unwrap();
     std::fs::write(dir.path().join("b"), b"12").unwrap();
@@ -33,11 +38,16 @@ fn publishing_reuses_blob_links_and_preserves_existing_stores() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("snapshot");
     let model = dir.path().join("model");
+
     std::fs::create_dir(&source).unwrap();
     std::fs::write(source.join("config.json"), b"{}").unwrap();
+
     let files = BTreeSet::from(["config.json".into()]);
+
     publish(&model, &source, &files).unwrap();
+
     let packed = model.join("packed");
+
     std::fs::create_dir(&packed).unwrap();
     std::fs::write(packed.join("experts2.bin"), b"two").unwrap();
     std::fs::write(packed.join("experts3.bin"), b"three").unwrap();

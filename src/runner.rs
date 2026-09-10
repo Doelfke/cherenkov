@@ -13,6 +13,7 @@ use diagnostics::{dump_decode, dump_prefill_chunk, dump_run, qwen4_exp_check_row
 
 pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
     options.validate()?;
+
     let (max_tokens, max_ctx, raw, check, repeat) = (
         options.max_tokens,
         options.max_ctx,
@@ -30,12 +31,15 @@ pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
             .user(prompt)?
     };
     let ids = tok.encode(&prompt.text)?;
+
     check_budget(ids.len(), max_tokens, options.effective_drafts(), max_ctx)?;
+
     if options.cut_weak > 0.0 {
         eprintln!(
             "WARNING: --cut-weak skips late weak experts; output depends on disk timing and is not reproducible."
         );
     }
+
     let t0 = std::time::Instant::now();
     let packed = qwen4_exp::packed::Packed::open(model_dir)?;
     let mut gpu = qwen4_exp::gpu::Gpu::load(&packed, max_ctx, options)?;
@@ -44,6 +48,7 @@ pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
     } else {
         None
     };
+
     eprintln!(
         "cherenkov gpu: max_ctx {max_ctx}, {:.2} GB Metal (expert pool {:.1} GB = {} records, working-set limit {:.2} GB), load {:.2}s, clock probe {:.2} ms",
         gpu.allocated_gb(),
@@ -53,12 +58,15 @@ pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
         t0.elapsed().as_secs_f64(),
         gpu.throttle_ms()?
     );
+
     for run in 0..repeat {
         if run > 0 {
             gpu.reset();
             eprintln!("--- repeat {run}: clock probe {:.2} ms", gpu.throttle_ms()?);
         }
+
         let mut cpu_state = cpu.as_ref().map(|m| m.new_state());
+
         qwen4_exp_gen_once(
             &mut gpu,
             cpu.as_ref(),
@@ -70,14 +78,18 @@ pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
             None,
             &mut |token| {
                 use std::io::Write as _;
+
                 print!("{}", tok.decode(&[token])?);
                 std::io::stdout().flush()?;
+
                 Ok(())
             },
         )?;
         println!();
     }
+
     eprintln!("clock probe at end {:.2} ms", gpu.throttle_ms()?);
+
     dump_run(&gpu)
 }
 
@@ -98,6 +110,7 @@ fn prefill_engine(
     let n_chunks = ids.len().div_ceil(pf_chunk);
     let chunk_len = ids.len().div_ceil(n_chunks);
     let mut d1 = 0u32;
+
     while p < ids.len() {
         let n = (ids.len() - p).min(chunk_len);
         let chunk = &ids[p..p + n];
@@ -105,11 +118,14 @@ fn prefill_engine(
         let (c, d) = gpu.prefill_chunk(chunk, next_after, check || argmax_lines.is_some())?;
         cur = c;
         d1 = d;
+
         if let Some(lines) = argmax_lines.as_deref_mut() {
             dump_prefill_chunk(gpu, true, p, n, ids.len(), lines);
         }
+
         if let (Some(m), Some(st)) = (cpu, cpu_state.as_deref_mut()) {
             let mut next: Vec<u32> = chunk[1..].to_vec();
+
             next.push(next_after.unwrap_or(cur));
             qwen4_exp_check_rows(
                 m,
@@ -122,19 +138,25 @@ fn prefill_engine(
                 true,
             )?;
         }
+
         p += n;
     }
+
     if n_draft > 0 {
         drafts = vec![d1];
+
         if n_draft >= 2 {
             drafts.push(gpu.mtp_chain(d1)?);
         }
     }
+
     gpu.prefill_release();
+
     let st = &gpu.prefill_stats;
     let recs: usize = st.iter().map(|s| s.fetched).sum();
     let sum = |f: fn(&qwen4_exp::gpu::prefill::ChunkStats) -> f64| st.iter().map(f).sum::<f64>();
     let bytes: usize = st.iter().map(|s| s.fetched_bytes).sum();
+
     eprintln!(
         "prefill engine: {} chunk(s) of up to {pf_chunk}, {recs} expert records streamed ({:.1} GB, {:.0} MB/token), {:.1}s waiting for ring reuse | GPU s: DeltaNet blocks {:.1}, attention blocks {:.1}, expert streams {:.1}, MTP {:.1} | n-gram gather {:.1}s CPU",
         st.len(),
@@ -147,6 +169,7 @@ fn prefill_engine(
         sum(|s| s.gpu_mtp_s),
         sum(|s| s.ngram_s),
     );
+
     Ok(PrefillResume {
         next: cur,
         drafts,
@@ -164,6 +187,7 @@ fn prefill_row_batches(
     mut argmax_lines: Option<&mut Vec<String>>,
 ) -> Result<PrefillResume> {
     use qwen4_exp::gpu::MAX_NB;
+
     let (mut p, mut cur, mut drafts) = (0, ids[0], Vec::new());
     // Debug: CHERENKOV_ROWS_MAX caps rows per step in this path.
     let rows_max: usize = std::env::var("CHERENKOV_ROWS_MAX")
@@ -171,20 +195,27 @@ fn prefill_row_batches(
         .and_then(|v| v.parse().ok())
         .unwrap_or(MAX_NB)
         .clamp(1, MAX_NB);
+
     while p < ids.len() {
         let n = (ids.len() - p).min(rows_max);
         let rows = &ids[p..p + n];
         let res = gpu.step_rows(rows, false, false)?;
+
         if let Some(lines) = argmax_lines.as_deref_mut() {
             dump_prefill_chunk(gpu, false, p, n, ids.len(), lines);
         }
+
         gpu.commit(n)?;
+
         let last = p + n == ids.len();
         let mut next: Vec<u32> = ids[p + 1..p + n].to_vec();
+
         next.push(if last { res[n - 1] } else { ids[p + n] });
+
         if n_draft > 0 {
             drafts = gpu.mtp_draft(&next, if last { n_draft } else { 1 })?;
         }
+
         if let (Some(m), Some(st)) = (cpu, cpu_state.as_deref_mut()) {
             qwen4_exp_check_rows(
                 m,
@@ -197,9 +228,11 @@ fn prefill_row_batches(
                 false,
             )?;
         }
+
         p += n;
         cur = res[n - 1];
     }
+
     Ok(PrefillResume {
         next: cur,
         drafts,
@@ -217,6 +250,7 @@ fn prefill_prompt(
     resume: Option<PrefillResume>,
 ) -> Result<PrefillResume> {
     use qwen4_exp::gpu::MAX_NB;
+
     // Prefill in chunks of MAX_NB known tokens; the MTP head follows each
     // chunk to fill its cache and drafts after the last one.
     let t1 = std::time::Instant::now();
@@ -239,23 +273,28 @@ fn prefill_prompt(
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| gpu.prefill_rows_fit())
         .max(1);
+
     if check {
         pf_chunk = pf_chunk.min(1024);
     }
+
     let engine = !prepared && ids.len() >= pf_min;
     // Debug: CHERENKOV_DUMP_ARGMAX=path writes "pos argmax maxlogit" for
     // every prompt row, to diff the two prefill paths position by position.
     let dump_argmax = std::env::var("CHERENKOV_DUMP_ARGMAX").ok();
     let mut argmax_lines: Vec<String> = Vec::new();
     let lines = dump_argmax.as_ref().map(|_| &mut argmax_lines);
+
     if engine {
         seed = prefill_engine(gpu, cpu, cpu_state, ids, n_draft, pf_chunk, lines)?;
     } else if !prepared {
         seed = prefill_row_batches(gpu, cpu, cpu_state, ids, n_draft, lines)?;
     }
+
     if let Some(path) = &dump_argmax {
         std::fs::write(path, argmax_lines.join("\n") + "\n")?;
     }
+
     // Debug: CHERENKOV_DUMP_LOGITS=path writes the last prompt row's
     // logits (bisecting the prefill engine against the row-batched path).
     // Both paths leave the last row's logits in row 0 of the head buffer
@@ -269,9 +308,12 @@ fn prefill_prompt(
         };
         let l = gpu.logits_row(last_rows - 1);
         let bytes: Vec<u8> = l.iter().flat_map(|v| v.to_le_bytes()).collect();
+
         std::fs::write(&path, bytes)?;
     }
+
     let prefill = t1.elapsed().as_secs_f64();
+
     if !prepared {
         eprintln!(
             "prefill {} tokens in {:.2}s ({:.1} tok/s){}",
@@ -306,6 +348,7 @@ pub(crate) fn qwen4_exp_gen_once(
     // draft costs more than its extra tokens are worth under the
     // SSD-driven throttle, so the second draft is adaptive.
     let n_draft = options.effective_drafts();
+
     anyhow::ensure!(
         n_draft == 0 || gpu.has_mtp(),
         "drafting needs the checkpoint's MTP head"
@@ -315,15 +358,19 @@ pub(crate) fn qwen4_exp_gen_once(
     // fully accepted batches; this measured about 4% faster than always chaining.
 
     let mut seed = prefill_prompt(gpu, cpu, cpu_state.as_deref_mut(), ids, n_draft, resume)?;
+
     if !options.sampling.greedy() && seed.logits.is_none() {
         seed.logits = Some(gpu.logits_row(gpu.last_logits_row()).to_vec());
     }
+
     let prefill_steps = gpu.step_ms.len();
     let mut decoder = Decode::new(seed, ids, tok, options, max_tokens, None)?;
     let t2 = std::time::Instant::now();
+
     while decoder.finish_reason.is_none() {
         decoder.step(gpu, cpu, cpu_state.as_deref_mut(), emit)?;
     }
+
     let steps = decoder.steps;
     let accepted = decoder.accepted;
     let out = decoder.tokens;
@@ -343,6 +390,7 @@ pub(crate) fn qwen4_exp_gen_once(
     let la_recent = &gpu.lookahead_issued[gpu.lookahead_issued.len().saturating_sub(n)..];
     let warm_recent = &gpu.warm[gpu.warm.len().saturating_sub(n)..];
     let cut_recent = &gpu.cut[gpu.cut.len().saturating_sub(n)..];
+
     eprintln!(
         "  dispatches/step {} | cpu turnaround {:.1} ms/step | drafts {n_draft}, accepted {:.2}/step ({:.2} tokens/step) | mtp {:.1} ms/step | n-gram gather {:.1} ms/step",
         gpu.dispatches.last().copied().unwrap_or(0),
@@ -374,6 +422,7 @@ pub(crate) fn qwen4_exp_gen_once(
         gpu.allocated_gb()
     );
     dump_decode(gpu, ids, &out, prefill_steps)?;
+
     Ok(())
 }
 
@@ -391,14 +440,17 @@ pub(crate) fn check_budget(
     context: usize,
 ) -> Result<()> {
     anyhow::ensure!(prompt > 0, "prompt must contain at least one token");
+
     let need = prompt
         .checked_add(output)
         .and_then(|n| n.checked_add(drafts))
         .ok_or_else(|| anyhow::anyhow!("token budget overflows"))?;
+
     anyhow::ensure!(
         need <= context,
         "prompt ({prompt}) + output ({output}) + draft lookahead ({drafts}) needs {need} tokens, exceeding --max-ctx {context}"
     );
+
     Ok(())
 }
 

@@ -37,6 +37,7 @@ impl Output {
         let (sender, receiver) = mpsc::sync_channel(16);
         let writer_ticket = ticket.clone();
         let (streaming, include_usage) = (request.stream, request.include_usage);
+
         std::thread::spawn(move || {
             let created = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -51,9 +52,11 @@ impl Output {
                 include_usage,
             );
             let result = write_frames(&mut response, receiver, &writer_ticket);
+
             if result.is_err() {
                 writer_ticket.cancel();
             }
+
             state.update(|s| {
                 if writer_ticket.cancelled() {
                     s.cancelled_requests += 1;
@@ -64,6 +67,7 @@ impl Output {
                 }
             });
         });
+
         Self { sender, ticket }
     }
 
@@ -72,6 +76,7 @@ impl Output {
             self.ticket.cancel();
             bail!("client disconnected or output queue is full");
         }
+
         Ok(())
     }
 }
@@ -82,11 +87,13 @@ fn write_frames(
     ticket: &Ticket,
 ) -> Result<bool> {
     response.start()?;
+
     for frame in receiver {
         match frame {
             Frame::Text(text) => response.text(&text)?,
             Frame::Error(message) => {
                 response.fail(&message)?;
+
                 return Ok(false);
             }
             Frame::Finish {
@@ -98,14 +105,18 @@ fn write_frames(
                 // Cancellation must win before publication. Dropping an unpublished
                 // turn rolls it back before the final response is written.
                 let completed = ticket.complete();
+
                 if let Some(turn) = turn.filter(|_| completed) {
                     turn.publish();
                 }
+
                 response.finish(&text, if completed { reason } else { "cancelled" }, usage)?;
+
                 return Ok(completed);
             }
         }
     }
+
     bail!("output ended without a terminal response")
 }
 
