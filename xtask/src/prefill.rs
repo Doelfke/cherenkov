@@ -53,7 +53,7 @@ pub fn write_summary(out: &Path, report: &Value) -> Result<()> {
     }
 
     let mut s = format!(
-        "# Low-bit prefill comparison\n\n{} valid samples. Medians exclude loading and conversion.\n\n| Prompt tokens | Resident / miss bits | Before pp/s | After pp/s | Change | Pairs |\n| ---: | ---: | ---: | ---: | ---: | ---: |\n",
+        "# Low-bit prefill comparison\n\nThe report contains {} valid samples. The medians exclude loading and conversion.\n\n| Prompt tokens | Resident / miss bits | Before pp/s | After pp/s | Change | Pairs |\n| ---: | ---: | ---: | ---: | ---: | ---: |\n",
         runs.len()
     );
     let mut prompts: Vec<_> = report["prompts"]
@@ -73,14 +73,6 @@ pub fn write_summary(out: &Path, report: &Value) -> Result<()> {
                 .collect();
 
             append_median(&mut s, &selected, bits, miss)?;
-        }
-    }
-
-    if let Some(notes) = report["notes"].as_array() {
-        s.push('\n');
-
-        for note in notes {
-            writeln!(s, "{}", text(note))?;
         }
     }
 
@@ -108,17 +100,22 @@ pub fn write_summary(out: &Path, report: &Value) -> Result<()> {
 
         writeln!(
             s,
-            "- Round {}, {} tokens: Q4 output {}.",
+            "- Round {}, {} tokens: the Q4 outputs {}.",
             before["round"],
             before["metrics"]["prompt_tokens"],
-            if same { "identical" } else { "DIFFERS" }
+            if same { "are identical" } else { "differ" }
         )?;
     }
 
     s.push_str(
         "\nBinary hashes, timings, source and power readings are in [report.json](report.json).\n",
     );
-    fs::write(out.join("README.md"), s)?;
+
+    if out.join("README.md").is_file() {
+        s.push_str("\n[Run observations](README.md).\n");
+    }
+
+    fs::write(out.join("summary.md"), s)?;
 
     Ok(())
 }
@@ -288,13 +285,6 @@ pub fn run(options: Options) -> Result<()> {
         "prompts": prompts,
         "configurations": options.configs,
         "model": options.model.canonicalize()?,
-        "notes": [
-            "Fresh processes, context 8192, adaptive pool and two adaptive drafts.",
-            "Eight decode tokens check handoff; no prefix cache or deadline cut.",
-            "Loading and conversion excluded; any store build invalidates a sample.",
-            "AC checked at process boundaries and every 30 seconds.",
-            "Configurations and binary order rotate; OS file caches are retained.",
-        ],
         "runs": [],
     });
 

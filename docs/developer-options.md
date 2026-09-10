@@ -24,16 +24,7 @@ Diagnostic stage skipping or fake reads produce invalid model outputs.
 | `CHERENKOV_DUMP_STATES` | output path; off | Router states: JSON header plus binary records. |
 | `CHERENKOV_DUMP_TOKENS` | output path; off | JSON prompt and generated token IDs. |
 
-`CHERENKOV_MODEL_DIR` is test-only: packed model directory for the real-weight
-tests. They otherwise use the default managed model under the XDG
+`CHERENKOV_MODEL_DIR` selects a packed model directory for the real-weight
+tests. The tests otherwise use the default managed model under the XDG
 data directory and skip their bodies when the packed model is absent. Other kernel
 and CPU unit tests do not require a checkpoint.
-
-The removed precision, draft, pool-size, rebuild, cut, and EOS variables
-are now CLI flags. Old variables are ignored. Lookahead reads always
-start after the block's own misses land (measured ~11% improvement);
-the first MTP draft is folded into the trunk command buffer (one fewer
-submit/wait); extra drafts are chained only after full acceptance
-(measured ~4% improvement). The IO queue, weak-prefetch filtering,
-lookahead depth/top-k tuning, page-in alternative, split record reads,
-and dropped-miss/renormalization policies have been removed.

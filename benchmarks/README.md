@@ -1,6 +1,6 @@
 # Native Cherenkov benchmark
 
-Requires Rust, Metal, and a packed qwen4-exp checkpoint. Run on AC power
+The suite requires Rust, Metal, and a packed qwen4-exp checkpoint. Run on AC power
 with other GPU work stopped. The runner lives in `xtask/`; use
 `mise exec -- cargo ...` if Mise is not activated in your shell.
 
@@ -47,7 +47,7 @@ The four settings are: 4-bit, 4-bit
 resident/2-bit misses **with cut 0.08**, 3-bit, and 2-bit. The mixed
 setting changes both precision and deadline behavior; its output is
 not reproducible. Its gains must not be attributed to precision alone.
-All use two adaptive MTP drafts and the adaptive pool. Routed-expert
+All four settings use two adaptive MTP drafts and the adaptive pool. Routed-expert
 precision applies to both prefill and decode. Uniform low-bit runs use
 their compressed store in both phases; mixed prefill keeps Q4 pool entries
 and streams transient misses at the selected miss precision. The saved
@@ -72,13 +72,18 @@ do not add the two as independent components of decode time.
 - `report.json`: every sample, exact arguments, load/PP/TG timings, steps,
   MTP acceptance, GPU/IO time, memory, clock probes, power samples, source
   commit/hash, binary hash, and model metadata hashes.
-- `summary.md`: per-case/configuration medians, including output lengths
-  and completion times, excluding invalid runs.
+- `README.md`: optional, hand-written observations about the run.
+- `summary.md` contains medians, output lengths and completion times for valid
+  runs, plus pelicans and links to every answer. The page renders on GitHub
+  and the documentation site.
 - `outputs/`: full generated text, including reasoning/code fences.
 - `pelicans/`: complete XML-validated SVGs extracted without editing.
 - `gallery.html`: browser-ready speed comparisons, expandable phase timings,
   and passive images with generation rates and links to full output. It
   opens directly from disk; no server or Markdown renderer is needed.
+
+Retain `report.json`, `summary.md`, any run README, `outputs/` and `pelicans/`
+when publishing a run. `gallery.html` is a local preview and can be regenerated.
 
 Drawings are a visual artifact, not an accuracy metric. Element count
 and the requested 120-element budget are recorded. A missing/truncated
@@ -94,8 +99,12 @@ All outputs live under `results/`, with a UTC timestamp by default.
 Use `--output results/<name>` to name a run. New results are ignored by Git;
 use `git add -f results/<name>` to retain a reviewed run with the source.
 
+Browse the [benchmark reports](../results/README.md), or open a local
+`gallery.html` in your browser.
+
 Regenerate summaries and the gallery from an existing report without
-loading a model: `cargo xtask summarize results/<name>`.
+loading a model: `cargo xtask summarize results/<name>`. This command preserves
+the run README.
 
 `--update-readme` refreshes the root README after a completed benchmark.
 Use `cargo xtask readme results/<name>` to regenerate it from an existing
@@ -131,7 +140,9 @@ cargo xtask prefill --before /path/to/old/cherenkov \
 ```
 
 The report preserves binary hashes, the source diff, prompts, raw telemetry,
-generated text, and power readings. Keep both cached low-bit stores ready
+generated text, and power readings. The generated `summary.md` contains timings
+and output checks; an optional README holds run observations.
+Keep both cached low-bit stores ready
 before starting. Power is checked before/after each process and every
 30 seconds; shorter transitions can be missed.
 Run with no concurrent inference or GPU tests.

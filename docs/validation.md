@@ -22,8 +22,6 @@ Markdown. Markdown checks cover every `.md` file outside build directories.
 [styling-lint](https://github.com/visionsofparadise/styling-lint) keeps consecutive
 assignments and calls together and separates other statement groups. These are
 syntax rules, so review the diff for places where related steps belong together.
-The existing code still has spacing findings; this check is separate from the
-correctness checks above.
 
 ## Tests
 

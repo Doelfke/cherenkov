@@ -1,5 +1,10 @@
 # Documentation
 
+Run `mise run docs` to build the
+[website](https://alfredr.github.io/cherenkov/) in `_site/`.
+`.gitattributes` selects the files and `SUMMARY.md` sets the navigation.
+Changes to `main` publish automatically.
+
 - [Running](running.md): CLI, HTTP API, prefix caching and precision modes.
 - [Server configuration](server-config.md): TOML, memory policy and control CLI.
 - [Storage](storage.md): paths, downloads and packed expert stores.

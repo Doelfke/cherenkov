@@ -155,7 +155,8 @@ prefix reuse, and state-restoration checks.
 
 ## Expert precision and speculation
 
-Default: **4-bit experts, two adaptive MTP drafts, no deadline cut**.
+The engine defaults to **4-bit experts, two adaptive MTP drafts and no
+deadline cut**.
 `--drafts 0` disables speculation and does not load the draft head.
 Generation defaults to greedy argmax and the checkpoint's Jinja template with
 thinking disabled; `--raw` bypasses template rendering. CLI sampling uses

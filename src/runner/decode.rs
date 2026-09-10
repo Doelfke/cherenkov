@@ -84,7 +84,7 @@ impl Decode {
         emit(token)
     }
 
-    /// Returns after committed trunk/MTP work; GPU scratch can then be reused.
+    /// The step returns after committed trunk/MTP work, so GPU scratch can be reused.
     pub(crate) fn step(
         &mut self,
         gpu: &mut qwen4_exp::gpu::Gpu<'_>,

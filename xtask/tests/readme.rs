@@ -12,13 +12,13 @@ fn saved_rates_and_all_pelicans_are_rendered() -> Result<()> {
     let data = baseline()?;
     let text = readme::render(&data, Path::new("results/baseline-2026-09-09"))?;
 
-    assert!(text.contains("Saved revision `93c514f`; 80 valid samples."));
+    assert!(text.contains("The report contains 80 valid samples from revision `93c514f`."));
     assert!(text.contains("| 4-bit | 8.52 | 7.07 | 7.06 | 7.71 | 6.77 | 7.88 |"));
     assert!(text.contains("| 3-bit | 12.13 | 10.72 | 10.27 | 9.83 | 10.86 | 12.67 |"));
     assert!(text.contains("prefill-long pp/s"));
     assert_eq!(text.matches("![Pelican]").count(), 4);
     assert!(text.contains("results/baseline-2026-09-09/pelicans/exact-4bit.svg"));
-    assert!(text.contains("This baseline used Q4 batched prefill"));
+    assert!(text.contains("[All timings and outputs](results/baseline-2026-09-09/summary.md)"));
     assert!(!text.contains("TG/s") && !text.contains("PP/s"));
 
     Ok(())

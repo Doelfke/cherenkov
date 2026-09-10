@@ -23,8 +23,7 @@ separate the protocol from request execution:
 
 `src/prompt.rs` loads and compiles the checkpoint's Jinja template once for
 CLI/chat formatting. Cache boundaries are prefixes verified against the full
-rendered text. Session settings and messages reach the worker as typed input;
-resolving a session never rewrites the incoming request JSON.
+rendered text. Session settings and messages reach the worker as typed input.
 
 ## Ownership
 

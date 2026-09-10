@@ -6420,15 +6420,8 @@
         "drafts": 2,
         "accepted_drafts_per_step": 1.78
       },
-      "finish_reason": "eos",
-      "note": "Includes first-use 2-bit store construction in model load; excluded from the comparison and rerun with the cached store."
+      "finish_reason": "eos"
     }
-  ],
-  "notes": [
-    "The first mixed-mode load took 75.08 s because it built the 2-bit store. That sample is preserved in setup_runs and outputs/setup-code-misses-2bit.txt, excluded from comparison medians, and rerun using the cached store. Its separately timed prefill was 5.98 s and decode 20.77 s.",
-    "Both derived stores coexist with the base 4-bit store. Conversion finishes inside model load before either prefill or decode timing begins.",
-    "Answers reaching the safety cap are retained as incomplete, excluded from completion medians, and do not stop the remaining workloads.",
-    "The AC-to-battery transition during r3-code-misses-2bit is retained under previous_attempts; resume retries it on AC and excludes the interrupted measurement."
   ],
   "suite_revisions": [
     {
@@ -6844,8 +6837,5 @@
       "error": "power source changed during this sample"
     }
   ],
-  "utc_finished": "2026-09-09T20:11:26.463184+00:00",
-  "readme_notes": [
-    "This baseline used Q4 batched prefill in every expert mode. Later\nprefill changes are measured separately."
-  ]
+  "utc_finished": "2026-09-09T20:11:26.463184+00:00"
 }

@@ -6,9 +6,7 @@ The model is `Sawfwair/Qwen3.8-Flash-Next-MLX-4bit`, packed locally for
 Cherenkov. Exact model metadata and source hashes are in
 [report.json](report.json).
 
-- [Timings and pelicans in the browser](gallery.html)
-- [Markdown timing report](summary.md)
-- [Full generated answers](outputs/)
+- [Timings, pelicans and answers](summary.md)
 - [Benchmark method and commands](../../benchmarks/README.md)
 
 ## Completion
@@ -24,6 +22,9 @@ pauses between benchmark samples; retained measurements always use the
 pinned executable without concurrent build or correctness checks.
 
 ## Setup
+
+This baseline used Q4 batched prefill in every expert mode. The paired prefill
+reports measure the later changes.
 
 All configurations use two adaptive MTP drafts, an adaptive expert pool,
 and 8,192 context capacity. Every sample starts a fresh native Metal

@@ -33,7 +33,8 @@ the same assembler. Rust files contain no embedded Metal kernel bodies.
 
 ## Compilation and dependencies
 
-[`src/kernels.rs`](../src/kernels.rs) assembles two translation units at
+[`src/kernels.rs`](https://github.com/alfredr/cherenkov/blob/main/src/kernels.rs)
+assembles two translation units at
 Rust compile time, plus the device probe library. The engine and GPU tests
 use those same constants.
 These files are fragments, not independently compiled Metal libraries.

@@ -1,7 +1,6 @@
 # Storage and downloads
 
-`cherenkov paths` prints the resolved locations. One `Paths` type supplies
-these locations to downloads, server startup, packing and model-backed tests.
+`cherenkov paths` prints the resolved locations.
 
 | Lifetime | Default location | Contents |
 | --- | --- | --- |
@@ -12,8 +11,7 @@ these locations to downloads, server startup, packing and model-backed tests.
 These XDG defaults apply on macOS too. `XDG_DATA_HOME`, `XDG_CACHE_HOME`, and
 `XDG_CONFIG_HOME` override the respective base directories; Cherenkov appends
 `cherenkov` to each. Empty or relative overrides are ignored. Resolving paths
-does not create directories. The inference engine still requires Apple Silicon
-and Metal.
+does not create directories.
 
 `--root /some/directory` puts durable data directly under that root, scratch
 under `scratch/`, and config at `cherenkov.toml`. Supply it after the subcommand.
@@ -29,11 +27,9 @@ cherenkov serve
 ```
 
 `serve` reads the single default config file if it exists. `--config` selects
-another file. There is no directory search. Existing explicit local model
-paths still work and take precedence over the managed model default. No
-existing model directory is moved automatically, and previous `~/Library`
-locations are not searched. `download`, `pack`, and `paths` use `--root` or
-the XDG locations directly; they do not read `[server].root` from TOML.
+another file. There is no directory search. Explicit local model paths take
+precedence over the managed model default. `download`, `pack`, and `paths` use
+`--root` or the XDG locations directly; they do not read `[server].root` from TOML.
 
 ## Durable layout
 
@@ -81,10 +77,7 @@ directory includes its runtime metadata and can be passed directly to inference.
 `pack` reuses a completed base store instead of overwriting it. Select expert
 targets with `pack --experts 2,3` (commas, spaces, or repeated `--experts`);
 the default is `4`. Low-bit targets require the Q4 base, built first if needed.
-Both missing variants share a source-record pass with at most eight CPU
-workers, each retaining just one input and one output record buffer. The
-combined additional disk requirement is checked before conversion. Manifests
-are published only after the output files have been flushed successfully.
+Cherenkov checks the combined additional disk requirement before conversion.
 Valid existing variants are reused, and unselected variants are untouched.
 You can also pass an existing packed directory directly to `pack` to add
 variants there. `--output` selects the store directory, not a file name.
@@ -97,11 +90,6 @@ no Python installation or external `hf` command is required. Supply a token
 through `HF_TOKEN`, an existing Hugging Face login, or `download --hf-token`.
 Tokens are not written into Cherenkov TOML, model manifests or control responses.
 Using `HF_TOKEN` avoids putting the token in shell command history or arguments.
-
-Authentication supplies account permissions and account rate limits. Xet is
-the accelerated transfer mechanism; a token alone does not guarantee a higher
-transfer rate. See the [Hub client](https://github.com/huggingface/hf-hub) and
-[Hub rate limits](https://huggingface.co/docs/hub/rate-limits).
 
 Xet scratch defaults to the resolved scratch directory's `xet/` child.
 An explicit `HF_XET_CACHE` remains an upstream developer override. Hugging Face

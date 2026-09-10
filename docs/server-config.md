@@ -49,7 +49,7 @@ the generation. Reload without a startup config file returns an error.
 
 Retained sessions capture sampling defaults when created and retain their
 committed settings across reloads. New stateless requests use the latest
-captured configuration. Effort and native template controls remain unsupported.
+captured configuration.
 
 ## Memory and expert policy
 

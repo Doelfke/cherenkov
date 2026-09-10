@@ -2,12 +2,7 @@
 
 Source commit: `93c514f47e0f6c234aea47c11ccdf0c847f99dac`
 
-Fresh processes; configurations interleaved and rotated. Load is separate from
-PP/s and TG/s.
-Medians below include only complete, valid runs. Complete answers through EOS;
-no CPU-oracle checks or prefix caching.
-
-| Case | Configuration | Runs | Output tokens | Decode s | Load s | PP/s | TG/s | Metal GB |
+| Case | Configuration | Runs | Output tokens | Decode s | Load s | pp/s | tg/s | Metal GB |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | code | 4-bit | 3 | 187 | 21.94 | 0.57 | 5.2 | 8.52 | 20.98 |
 | code | 4-bit resident / 2-bit misses + cut 0.08 | 3 | 557 | 69.54 | 0.60 | 5.4 | 8.29 | 20.98 |
@@ -42,37 +37,101 @@ no CPU-oracle checks or prefix caching.
 | pelican | 3-bit | 1 | 1751 | 150.64 | 0.49 | 6.6 | 11.62 | 20.98 |
 | pelican | 2-bit | 1 | 2707 | 190.48 | 0.49 | 8.6 | 14.21 | 20.98 |
 
-The mixed 4/2-bit setting includes the timing-dependent deadline cut. Its output
-is not reproducible.
-SVG rates are artifact-generation timings, separate from the other completion
-cases.
-Long-prefill token count is measured by the engine; the fixture is not claimed
-to be an exact token length.
-Low-bit store construction is included in load. An existing file can also
-require rebuilding.
-Output lengths differ across settings; compare completion times as well as TG/s.
-Completion means reaching EOS; generated code and factual answers are not graded
-for correctness.
-Metal GB is the engine-reported allocation after prefill scratch is released,
-not a measured transient peak.
-Power is sampled at the start, end, and every 30 seconds; shorter transitions
-can go undetected.
-Telemetry times/rates have the precision printed by the engine; no load time is
-included in prefill.
+[Run observations](README.md).
 
-[Pelican gallery](gallery.html). Raw generated text is in `outputs/`; valid
-extracted SVGs are in `pelicans/`.
+## Pelicans
 
-## Run notes
+These are unedited model outputs from the benchmark.
 
-- The first mixed-mode load took 75.08 s because it built the 2-bit store. That
-  sample is preserved in setup_runs and outputs/setup-code-misses-2bit.txt,
-  excluded from comparison medians, and rerun using the cached store. Its
-  separately timed prefill was 5.98 s and decode 20.77 s.
-- Both derived stores coexist with the base 4-bit store. Conversion finishes
-  inside model load before either prefill or decode timing begins.
-- Answers reaching the safety cap are retained as incomplete, excluded from
-  completion medians, and do not stop the remaining workloads.
-- The AC-to-battery transition during r3-code-misses-2bit is retained under
-  previous_attempts; resume retries it on AC and excludes the interrupted
-  measurement.
+| 4-bit | 4-bit / 2-bit misses + cut |
+| --- | --- |
+| ![Pelican](pelicans/exact-4bit.svg) | ![Pelican](pelicans/misses-2bit.svg) |
+
+| 3-bit | 2-bit |
+| --- | --- |
+| ![Pelican](pelicans/all-3bit.svg) | ![Pelican](pelicans/all-2bit.svg) |
+
+## Answers
+
+| Sample | Status |
+| --- | --- |
+| [r1-code-exact-4bit](outputs/r1-code-exact-4bit.txt) | ok |
+| [r1-code-all-3bit](outputs/r1-code-all-3bit.txt) | ok |
+| [r1-code-all-2bit](outputs/r1-code-all-2bit.txt) | ok |
+| [r1-code-lru-exact-4bit](outputs/r1-code-lru-exact-4bit.txt) | ok |
+| [r1-code-lru-misses-2bit](outputs/r1-code-lru-misses-2bit.txt) | ok |
+| [r1-code-lru-all-3bit](outputs/r1-code-lru-all-3bit.txt) | ok |
+| [r1-code-misses-2bit](outputs/r1-code-misses-2bit.txt) | ok |
+| [r1-debug-bisect-exact-4bit](outputs/r1-debug-bisect-exact-4bit.txt) | ok |
+| [r1-code-lru-all-2bit](outputs/r1-code-lru-all-2bit.txt) | ok |
+| [r1-debug-bisect-misses-2bit](outputs/r1-debug-bisect-misses-2bit.txt) | ok |
+| [r1-debug-bisect-all-3bit](outputs/r1-debug-bisect-all-3bit.txt) | ok |
+| [r1-debug-bisect-all-2bit](outputs/r1-debug-bisect-all-2bit.txt) | ok |
+| [r1-prose-exact-4bit](outputs/r1-prose-exact-4bit.txt) | ok |
+| [r1-prose-misses-2bit](outputs/r1-prose-misses-2bit.txt) | ok |
+| [r1-prose-all-3bit](outputs/r1-prose-all-3bit.txt) | ok |
+| [r1-prose-all-2bit](outputs/r1-prose-all-2bit.txt) | ok |
+| [r1-reasoning-exact-4bit](outputs/r1-reasoning-exact-4bit.txt) | ok |
+| [r1-reasoning-misses-2bit](outputs/r1-reasoning-misses-2bit.txt) | ok |
+| [r1-reasoning-all-3bit](outputs/r1-reasoning-all-3bit.txt) | ok |
+| [r1-reasoning-all-2bit](outputs/r1-reasoning-all-2bit.txt) | ok |
+| [r1-structured-exact-4bit](outputs/r1-structured-exact-4bit.txt) | ok |
+| [r1-structured-misses-2bit](outputs/r1-structured-misses-2bit.txt) | ok |
+| [r1-structured-all-3bit](outputs/r1-structured-all-3bit.txt) | ok |
+| [r1-structured-all-2bit](outputs/r1-structured-all-2bit.txt) | ok |
+| [r1-prefill-long-exact-4bit](outputs/r1-prefill-long-exact-4bit.txt) | ok |
+| [r1-prefill-long-misses-2bit](outputs/r1-prefill-long-misses-2bit.txt) | ok |
+| [r1-prefill-long-all-3bit](outputs/r1-prefill-long-all-3bit.txt) | ok |
+| [r1-prefill-long-all-2bit](outputs/r1-prefill-long-all-2bit.txt) | ok |
+| [r2-code-misses-2bit](outputs/r2-code-misses-2bit.txt) | ok |
+| [r2-code-all-3bit](outputs/r2-code-all-3bit.txt) | ok |
+| [r2-code-all-2bit](outputs/r2-code-all-2bit.txt) | ok |
+| [r2-code-exact-4bit](outputs/r2-code-exact-4bit.txt) | ok |
+| [r2-code-lru-misses-2bit](outputs/r2-code-lru-misses-2bit.txt) | ok |
+| [r2-code-lru-all-3bit](outputs/r2-code-lru-all-3bit.txt) | ok |
+| [r2-code-lru-all-2bit](outputs/r2-code-lru-all-2bit.txt) | ok |
+| [r2-code-lru-exact-4bit](outputs/r2-code-lru-exact-4bit.txt) | ok |
+| [r2-debug-bisect-misses-2bit](outputs/r2-debug-bisect-misses-2bit.txt) | ok |
+| [r2-debug-bisect-all-3bit](outputs/r2-debug-bisect-all-3bit.txt) | ok |
+| [r2-debug-bisect-all-2bit](outputs/r2-debug-bisect-all-2bit.txt) | ok |
+| [r2-debug-bisect-exact-4bit](outputs/r2-debug-bisect-exact-4bit.txt) | ok |
+| [r2-prose-misses-2bit](outputs/r2-prose-misses-2bit.txt) | ok |
+| [r2-prose-all-3bit](outputs/r2-prose-all-3bit.txt) | ok |
+| [r2-prose-all-2bit](outputs/r2-prose-all-2bit.txt) | ok |
+| [r2-prose-exact-4bit](outputs/r2-prose-exact-4bit.txt) | ok |
+| [r2-reasoning-misses-2bit](outputs/r2-reasoning-misses-2bit.txt) | ok |
+| [r2-reasoning-all-3bit](outputs/r2-reasoning-all-3bit.txt) | ok |
+| [r2-reasoning-all-2bit](outputs/r2-reasoning-all-2bit.txt) | ok |
+| [r2-reasoning-exact-4bit](outputs/r2-reasoning-exact-4bit.txt) | ok |
+| [r2-structured-misses-2bit](outputs/r2-structured-misses-2bit.txt) | ok |
+| [r2-structured-all-3bit](outputs/r2-structured-all-3bit.txt) | ok |
+| [r2-structured-all-2bit](outputs/r2-structured-all-2bit.txt) | ok |
+| [r2-structured-exact-4bit](outputs/r2-structured-exact-4bit.txt) | ok |
+| [r3-code-all-3bit](outputs/r3-code-all-3bit.txt) | ok |
+| [r3-code-all-2bit](outputs/r3-code-all-2bit.txt) | ok |
+| [r3-code-exact-4bit](outputs/r3-code-exact-4bit.txt) | ok |
+| [r3-code-misses-2bit](outputs/r3-code-misses-2bit.txt) | ok |
+| [r3-code-lru-all-3bit](outputs/r3-code-lru-all-3bit.txt) | ok |
+| [r3-code-lru-all-2bit](outputs/r3-code-lru-all-2bit.txt) | ok |
+| [r3-code-lru-exact-4bit](outputs/r3-code-lru-exact-4bit.txt) | ok |
+| [r3-code-lru-misses-2bit](outputs/r3-code-lru-misses-2bit.txt) | ok |
+| [r3-debug-bisect-all-3bit](outputs/r3-debug-bisect-all-3bit.txt) | ok |
+| [r3-debug-bisect-all-2bit](outputs/r3-debug-bisect-all-2bit.txt) | ok |
+| [r3-debug-bisect-exact-4bit](outputs/r3-debug-bisect-exact-4bit.txt) | ok |
+| [r3-debug-bisect-misses-2bit](outputs/r3-debug-bisect-misses-2bit.txt) | ok |
+| [r3-prose-all-3bit](outputs/r3-prose-all-3bit.txt) | ok |
+| [r3-prose-all-2bit](outputs/r3-prose-all-2bit.txt) | ok |
+| [r3-prose-exact-4bit](outputs/r3-prose-exact-4bit.txt) | ok |
+| [r3-prose-misses-2bit](outputs/r3-prose-misses-2bit.txt) | ok |
+| [r3-reasoning-all-3bit](outputs/r3-reasoning-all-3bit.txt) | ok |
+| [r3-reasoning-all-2bit](outputs/r3-reasoning-all-2bit.txt) | ok |
+| [r3-reasoning-exact-4bit](outputs/r3-reasoning-exact-4bit.txt) | ok |
+| [r3-reasoning-misses-2bit](outputs/r3-reasoning-misses-2bit.txt) | ok |
+| [r3-structured-all-3bit](outputs/r3-structured-all-3bit.txt) | ok |
+| [r3-structured-all-2bit](outputs/r3-structured-all-2bit.txt) | ok |
+| [r3-structured-exact-4bit](outputs/r3-structured-exact-4bit.txt) | ok |
+| [r3-structured-misses-2bit](outputs/r3-structured-misses-2bit.txt) | ok |
+| [r1-pelican-exact-4bit](outputs/r1-pelican-exact-4bit.txt) | ok |
+| [r1-pelican-misses-2bit](outputs/r1-pelican-misses-2bit.txt) | ok |
+| [r1-pelican-all-3bit](outputs/r1-pelican-all-3bit.txt) | ok |
+| [r1-pelican-all-2bit](outputs/r1-pelican-all-2bit.txt) | ok |

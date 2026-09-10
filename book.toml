@@ -1,0 +1,18 @@
+[book]
+title = "Cherenkov"
+language = "en"
+src = "."
+
+[build]
+create-missing = false
+use-default-preprocessors = false
+
+[preprocessor.links]
+
+[output.html]
+site-url = "/cherenkov/"
+git-repository-url = "https://github.com/alfredr/cherenkov"
+no-section-label = true
+
+[output.html.playground]
+runnable = false

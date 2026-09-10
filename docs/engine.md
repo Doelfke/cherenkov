@@ -36,8 +36,7 @@ indices inside kernels are elements unless stated otherwise.
 The [kernel map](../kernels/README.md) lists each file's responsibility.
 `src/kernels.rs` assembles the common and qwen4-exp libraries for both the
 engine and its GPU tests; fragments keep their own filenames in compiler
-diagnostics. Splitting files changes organization, not the number of
-libraries, command buffers, or kernel dispatches.
+diagnostics.
 
 Decode dispatch lives in the `gpu/attention`, `deltanet`, `experts`,
 `hyperconnection`, `ple`, and `sampling` child modules. Prefill has matching
