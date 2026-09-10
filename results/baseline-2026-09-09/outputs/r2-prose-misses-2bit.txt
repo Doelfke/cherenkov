@@ -1,0 +1,51 @@
+### Why Hash Tables Need to Handle Collisions
+
+To understand why collisions must be handled, we must first look at the fundamental mechanism of a hash table.
+
+#### 1. The Core Concept
+A hash table works by using a **hash function** to map a key (e.g., `"apple"`) to an index in an array (e.g., index `5`).
+
+$$ \text{Index} = \text{Hash}(\text{Key}) \pmod{\text{Array Size}} $$
+
+#### 2. Why Collisions Occur
+Collisions occur because of two main factors:
+1.  **Finite Storage:** The hash table has a fixed number of slots (buckets).
+2.  **Infinite/Unbounded Keys:** The number of possible keys is usually much larger than the number of available slots.
+
+By the **Pigeonhole Principle**, if you have more items than slots, at least two items must map to the same slot.
+
+#### 3. Why Handling is Necessary
+If a hash table did not handle collisions, inserting a second key that maps to an already occupied slot would result in one of two failures:
+*   **Data Loss:** The new value overwrites the old value.
+*   **Insertion Failure:** The new value is rejected because the slot is "full."
+
+Both scenarios violate the fundamental contract of a hash table, which is to store and retrieve **all** unique keys correctly.
+
+---
+
+### Short Example
+
+Imagine a hash table with **3 slots** (indices 0, 1, 2) and a simple hash function: $\text{Hash}(key) = \text{length}(key) \pmod 3$.
+
+| Key | Length | Calculation | Index |
+| :--- | :--- | :--- | :--- |
+| `"cat"` | 3 | $3 \pmod 3 = 0$ | **0** |
+| `"dog"` | 3 | $3 \pmod 3 = 0$ | **0** |
+
+**The Collision:**
+Both `"cat"` and `"dog"` map to **Index 0**.
+
+**If Collisions Are NOT Handled:**
+1.  Insert `"cat"` → Index 0 stores `"cat"`.
+2.  Insert `"dog"` → Index 0 is occupied.
+    *   *Result:* `"dog"` is either rejected or overwrites `"cat"`.
+    *   *Result:* Searching for `"cat"` might return `"dog"`'s data (or nothing), causing data corruption.
+
+**If Collisions ARE Handled (e.g., via Chaining):**
+1.  Index 0 stores a linked list: `["cat", "dog"]`.
+2.  Insert `"cat"` → Added to list at Index 0.
+3.  Insert `"dog"` → Added to list at Index 0.
+4.  Search for `"cat"` → Check Index 0 → Scan list → Find `"cat"` → **Success.**
+
+### Conclusion
+Hash tables must handle collisions to ensure that **multiple keys mapping to the same index can coexist** without data loss or retrieval errors. Common strategies include **Separate Chaining** (linked lists) and **Open Addressing** (probing for the next empty slot).

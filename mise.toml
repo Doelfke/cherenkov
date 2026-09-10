@@ -1,0 +1,44 @@
+[tools]
+rust = { version = "1.98.1", profile = "minimal", components = ["clippy", "rustfmt"] }
+node = "22.22.0"
+"npm:markdownlint-cli2" = "0.23.2"
+
+[tasks.fmt]
+description = "Format Rust source"
+run = "cargo fmt --all"
+
+[tasks.fmt-check]
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.lint-md]
+description = "Lint repository Markdown"
+run = "markdownlint-cli2"
+
+[tasks.fix-md]
+description = "Apply Markdown lint fixes"
+run = "markdownlint-cli2 --fix"
+
+[tasks.clippy]
+description = "Run strict Clippy, including the experimental nesting limit"
+run = "cargo clippy --workspace --all-targets --offline -- -D warnings"
+
+[tasks.oxisym]
+description = "Run the Oxisym Rust lints"
+run = "cargo dylint --git https://github.com/alfredr/oxisym --all -- --workspace --all-targets"
+
+[tasks.test]
+description = "Run Rust tests serially; set CHERENKOV_MODEL_DIR for model checks"
+run = "cargo test --workspace --release --offline -- --test-threads=1"
+
+[tasks.check-metal]
+description = "Syntax-check the assembled Metal libraries with the real compiler"
+run = "cargo xtask check-metal"
+
+[tasks.bench]
+description = "Run the benchmark suite and generate pelicans"
+run = "cargo xtask bench"
+
+[tasks.smoke]
+description = "Run live checks with a temporary server"
+run = "cargo xtask smoke"

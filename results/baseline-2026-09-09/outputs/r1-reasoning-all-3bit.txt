@@ -1,0 +1,115 @@
+To find the earliest time all 120 parts can be finished, we must determine the optimal allocation of parts between Machine A and Machine B. Since both machines operate simultaneously, the total time to finish is determined by the machine that takes the longest to complete its assigned share of the work.
+
+Let $N_A$ be the number of parts produced by Machine A.
+Let $N_B$ be the number of parts produced by Machine B.
+
+The constraints are:
+1.  $N_A + N_B = 120$
+2.  $N_A, N_B$ must be non-negative integers.
+3.  $N_B = 120 - N_A$
+
+### Step 1: Define Time Functions
+
+**Machine A:**
+*   Setup time: 30 minutes = $0.5$ hours.
+*   Production rate: 8 parts/hour.
+*   Time to produce $N_A$ parts: $T_A(N_A) = 0.5 + \frac{N_A}{8}$ hours.
+
+**Machine B:**
+*   Setup time: 12 minutes = $\frac{12}{60}$ hours = $0.2$ hours.
+*   Production rate: 5 parts/hour.
+*   Time to produce $N_B$ parts: $T_B(N_B) = 0.2 + \frac{N_B}{5}$ hours.
+
+The total time to finish all parts is $T_{total} = \max(T_A(N_A), T_B(120 - N_A))$. We want to minimize this maximum time.
+
+### Step 2: Find the Continuous Optimal Allocation
+
+First, let's find the allocation where the completion times are equal, ignoring the integer constraint for a moment. This gives us the theoretical lower bound.
+
+Set $T_A(N_A) = T_B(120 - N_A)$:
+
+$$0.5 + \frac{N_A}{8} = 0.2 + \frac{120 - N_A}{5}$$
+
+Subtract 0.2 from both sides:
+$$0.3 + \frac{N_A}{8} = \frac{120 - N_A}{5}$$
+
+Multiply the entire equation by 40 (the least common multiple of 8 and 5) to clear denominators:
+$$40(0.3) + 40\left(\frac{N_A}{8}\right) = 40\left(\frac{120 - N_A}{5}\right)$$
+$$12 + 5N_A = 8(120 - N_A)$$
+$$12 + 5N_A = 960 - 8N_A$$
+
+Add $8N_A$ to both sides and subtract 12 from both sides:
+$$13N_A = 948$$
+$$N_A = \frac{948}{13} \approx 72.92$$
+
+Since $N_A$ must be an integer, we must check the integers closest to 72.92, which are **72** and **73**.
+
+### Step 3: Check Integer Completions
+
+We calculate the total time for $N_A = 72$ and $N_A = 73$.
+
+**Case 1: $N_A = 72$**
+*   $N_B = 120 - 72 = 48$
+*   Time for Machine A:
+    $$T_A = 0.5 + \frac{72}{8} = 0.5 + 9 = 9.5 \text{ hours}$$
+*   Time for Machine B:
+    $$T_B = 0.2 + \frac{48}{5} = 0.2 + 9.6 = 9.8 \text{ hours}$$
+*   Total Time: $\max(9.5, 9.8) = \mathbf{9.8}$ **hours**.
+
+**Case 2: $N_A = 73$**
+*   $N_B = 120 - 73 = 47$
+*   Time for Machine A:
+    $$T_A = 0.5 + \frac{73}{8} = 0.5 + 9.125 = 9.625 \text{ hours}$$
+*   Time for Machine B:
+    $$T_B = 0.2 + \frac{47}{5} = 0.2 + 9.4 = 9.6 \text{ hours}$$
+*   Total Time: $\max(9.625, 9.6) = \mathbf{9.625}$ **hours**.
+
+**Case 3: Check $N_A = 74$ (to ensure we didn't miss a better integer further away)**
+*   $N_B = 120 - 74 = 46$
+*   Time for Machine A:
+    $$T_A = 0.5 + \frac{74}{8} = 0.5 + 9.25 = 9.75 \text{ hours}$$
+*   Time for Machine B:
+    $$T_B = 0.2 + \frac{46}{5} = 0.2 + 9.2 = 9.4 \text{ hours}$$
+*   Total Time: $\max(9.75, 9.4) = \mathbf{9.75}$ **hours**.
+
+**Case 4: Check $N_A = 71$ (to ensure we didn't miss a better integer further away)**
+*   $N_B = 120 - 71 = 49$
+*   Time for Machine A:
+    $$T_A = 0.5 + \frac{71}{8} = 0.5 + 8.875 = 9.375 \text{ hours}$$
+*   Time for Machine B:
+    $$T_B = 0.2 + \frac{49}{5} = 0.2 + 9.8 = 10.0 \text{ hours}$$
+*   Total Time: $\max(9.375, 10.0) = \mathbf{10.0}$ **hours**.
+
+### Step 4: Analysis and Conclusion
+
+Comparing the results:
+*   $N_A = 71 \rightarrow 10.0$ hours
+*   $N_A = 72 \rightarrow 9.8$ hours
+*   $N_A = 73 \rightarrow 9.625$ hours
+*   $N_A = 74 \rightarrow 9.75$ hours
+
+The minimum time occurs at $N_A = 73$.
+
+**Verification of "Immediately Preceding Completion Time":**
+The prompt asks to check the immediately preceding completion time. In the context of discrete integer allocations, this usually refers to checking the neighbor integers ($N_A=72$ and $N_A=74$) to confirm the local minimum. We have done this above.
+*   At $N_A=72$, Machine B is the bottleneck (9.8h).
+*   At $N_A=73$, Machine A is the bottleneck (9.625h).
+*   At $N_A=74$, Machine A is the bottleneck (9.75h).
+
+The transition from $N_A=72$ to $N_A=73$ shifts the bottleneck from Machine B to Machine A. The time decreases from 9.8h to 9.625h. The transition from $N_A=73$ to $N_A=74$ keeps the bottleneck on Machine A, but increases the time because Machine A is slower per part than Machine B relative to the shift in load? Let's check the slopes.
+Slope of $T_A$ w.r.t $N_A$ is $1/8 = 0.125$.
+Slope of $T_B$ w.r.t $N_A$ (since $N_B$ decreases as $N_A$ increases) is $-1/5 = -0.2$.
+At $N_A=73$, $T_A > T_B$. Increasing $N_A$ further increases $T_A$ by 0.125 per unit and decreases $T_B$ by 0.2 per unit. Since $T_A$ is the max, increasing $N_A$ increases the max time. Decreasing $N_A$ to 72 decreases $T_A$ by 0.125 but increases $T_B$ by 0.2. Since $T_B$ was lower than $T_A$ at 73? No, at 73, $T_A=9.625$ and $T_B=9.6$. $T_A$ is the bottleneck.
+If we go to 72: $T_A$ drops to 9.5, $T_B$ rises to 9.8. Max is 9.8.
+If we go to 74: $T_A$ rises to 9.75, $T_B$ drops to 9.4. Max is 9.75.
+
+Thus, 9.625 is indeed the minimum.
+
+**Final Answer Calculation:**
+The earliest time is **9.625 hours**.
+
+To express this in hours and minutes:
+$0.625 \text{ hours} = 0.625 \times 60 \text{ minutes} = 37.5 \text{ minutes}$.
+
+**Answer:**
+The earliest time all 120 parts can be finished is **9 hours and 37.5 minutes** (or **9.625 hours**).

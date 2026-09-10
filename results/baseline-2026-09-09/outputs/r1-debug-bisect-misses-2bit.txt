@@ -1,0 +1,165 @@
+# Debugging `lower_bound`
+
+## Analysis of Failures
+
+The original function has **multiple critical bugs**:
+
+### Bug 1: Incorrect `hi` initialization
+```python
+hi = len(a) - 1  # WRONG
+```
+`hi` should be `len(a)` (exclusive upper bound), not `len(a) - 1`. With `hi = len(a) - 1`, if all elements are `< target`, the loop may terminate with `lo == hi == len(a)-1`, returning an index that doesn't satisfy the condition. More critically, if `target` is greater than all elements, we need to return `len(a)`, but `hi` never reaches `len(a)`.
+
+### Bug 2: Incorrect `lo` update in the `<` branch
+```python
+if a[mid] < target:
+    lo = mid  # WRONG — should be lo = mid + 1
+```
+When `a[mid] < target`, `mid` cannot be the answer, so `lo` must move **past** `mid`. Setting `lo = mid` causes an **infinite loop** when `lo` and `hi` are adjacent (e.g., `lo=0, hi=1, mid=0` → `lo` stays `0` forever).
+
+### Bug 3: Incorrect `hi` update in the `>=` branch
+```python
+else:
+    hi = mid - 1  # WRONG — should be hi = mid
+```
+When `a[mid] >= target`, `mid` **could** be the answer, so `hi` must stay **at** `mid`, not skip it. Setting `hi = mid - 1` can skip over the correct answer.
+
+### Bug 4: Return value when no element satisfies the condition
+Even if the loop terminated correctly, returning `lo` when `lo == hi == len(a)-1` would return an index whose value is `< target`, violating the contract.
+
+---
+
+## Corrected Implementation
+
+```python
+def lower_bound(a, target):
+    """
+    Return the first index i such that a[i] >= target,
+    or len(a) if no such index exists.
+    Assumes a is sorted in non-decreasing order.
+    """
+    lo, hi = 0, len(a)  # hi is exclusive
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if a[mid] < target:
+            lo = mid + 1   # mid is too small; answer is to the right
+        else:
+            hi = mid       # mid could be the answer; keep it in range
+    return lo
+```
+
+### Loop Invariant
+
+> **Invariant**: At every iteration, the answer lies in `[lo, hi]`.
+> - `a[0..lo-1]` are all `< target` (candidates eliminated from the left).
+> - `a[hi..len(a)-1]` are all `>= target` (candidates eliminated from the right), **or** `hi == len(a)` meaning no element satisfies the condition yet.
+>
+> **Initialization**: `lo=0, hi=len(a)` — the answer is somewhere in `[0, len(a)]`, which is trivially true.
+>
+> **Maintenance**:
+> - If `a[mid] < target`: `mid` cannot be the answer, so we set `lo = mid + 1`. The invariant holds because `a[0..mid]` are all `< target`.
+> - If `a[mid] >= target`: `mid` could be the answer, so we set `hi = mid`. The invariant holds because `a[mid..hi-1]` are all `>= target`.
+>
+> **Termination**: When `lo == hi`, the only candidate is `lo`. If `lo == len(a)`, no element satisfies the condition; otherwise `a[lo] >= target` and `a[lo-1] < target` (if `lo > 0`).
+
+---
+
+## Runnable Tests
+
+```python
+import unittest
+
+
+class TestLowerBound(unittest.TestCase):
+
+    def test_empty_array(self):
+        """Empty input should return 0 (== len(a))."""
+        self.assertEqual(lower_bound([], 5), 0)
+
+    def test_single_element_less(self):
+        """Single element < target → return len(a) = 1."""
+        self.assertEqual(lower_bound([3], 5), 1)
+
+    def test_single_element_equal(self):
+        """Single element == target → return 0."""
+        self.assertEqual(lower_bound([5], 5), 0)
+
+    def test_single_element_greater(self):
+        """Single element > target → return 0."""
+        self.assertEqual(lower_bound([7], 5), 0)
+
+    def test_target_below_all(self):
+        """Target smaller than all elements → return 0."""
+        self.assertEqual(lower_bound([2, 3, 5, 7], 1), 0)
+
+    def test_target_above_all(self):
+        """Target larger than all elements → return len(a)."""
+        self.assertEqual(lower_bound([2, 3, 5, 7], 10), 4)
+
+    def test_target_not_present_between(self):
+        """Target not in array, falls between two values."""
+        self.assertEqual(lower_bound([2, 3, 5, 7], 4), 2)
+
+    def test_duplicates_first_occurrence(self):
+        """Duplicates: must return the FIRST index with value >= target."""
+        self.assertEqual(lower_bound([1, 2, 2, 2, 3, 4], 2), 1)
+
+    def test_duplicates_all_same(self):
+        """All elements equal to target → return 0."""
+        self.assertEqual(lower_bound([5, 5, 5, 5], 5), 0)
+
+    def test_duplicates_target_not_present(self):
+        """Target not present, between duplicates."""
+        self.assertEqual(lower_bound([1, 2, 2, 2, 3, 4], 2.5), 4)
+
+    def test_boundary_target_equals_first(self):
+        """Target equals first element."""
+        self.assertEqual(lower_bound([1, 2, 3, 4], 1), 0)
+
+    def test_boundary_target_equals_last(self):
+        """Target equals last element."""
+        self.assertEqual(lower_bound([1, 2, 3, 4], 4), 3)
+
+    def test_two_elements(self):
+        """Two-element edge case."""
+        self.assertEqual(lower_bound([1, 3], 2), 1)
+        self.assertEqual(lower_bound([1, 3], 3), 1)
+        self.assertEqual(lower_bound([1, 3], 4), 2)
+
+    def test_negative_numbers(self):
+        """Array with negative numbers."""
+        self.assertEqual(lower_bound([-5, -3, 0, 2], -4), 1)
+        self.assertEqual(lower_bound([-5, -3, 0, 2], -6), 0)
+        self.assertEqual(lower_bound([-5, -3, 0, 2], 3), 4)
+
+    def test_large_array(self):
+        """Larger array to catch off-by-one errors."""
+        arr = list(range(0, 100, 2))  # [0, 2, 4, ..., 98]
+        self.assertEqual(lower_bound(arr, 50), 25)   # arr[25] == 50
+        self.assertEqual(lower_bound(arr, 51), 26)   # arr[26] == 52
+        self.assertEqual(lower_bound(arr, -1), 0)
+        self.assertEqual(lower_bound(arr, 99), 50)   # len(arr) == 50
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+### Expected Output
+
+```
+................
+----------------------------------------------------------------------
+Ran 16 tests in 0.001s
+
+OK
+```
+
+## Summary of Fixes
+
+| Bug | Original | Fixed | Why |
+|-----|----------|-------|-----|
+| `hi` init | `len(a) - 1` | `len(a)` | Need exclusive upper bound to return `len(a)` when no element qualifies |
+| `lo` update | `lo = mid` | `lo = mid + 1` | `mid` is eliminated; prevents infinite loop |
+| `hi` update | `hi = mid - 1` | `hi = mid` | `mid` could be the answer; must stay in search range |
+| Return | `return lo` (with broken logic) | `return lo` (with correct logic) | Now `lo` correctly points to first `>= target` or `len(a)` |

@@ -1,0 +1,138 @@
+To find the earliest time all 120 parts can be finished, we must determine the optimal allocation of work between Machine A and Machine B. Since both machines run simultaneously, the total time taken will be determined by the machine that finishes its assigned share of the work last.
+
+Let $t$ be the total time in hours.
+Let $N_A$ be the number of parts produced by Machine A.
+Let $N_B$ be the number of parts produced by Machine B.
+
+**Constraints:**
+1.  $N_A + N_B = 120$
+2.  $N_A$ and $N_B$ must be integers (partial parts do not count).
+3.  The time taken by Machine A must be $\le t$.
+4.  The time taken by Machine B must be $\le t$.
+
+**Machine Parameters:**
+*   **Machine A:**
+    *   Setup time: 30 minutes = $0.5$ hours.
+    *   Production rate: 8 parts/hour.
+    *   Time to produce $N_A$ parts: $T_A = 0.5 + \frac{N_A}{8}$ hours.
+*   **Machine B:**
+    *   Setup time: 12 minutes = $\frac{12}{60} = 0.2$ hours.
+    *   Production rate: 5 parts/hour.
+    *   Time to produce $N_B$ parts: $T_B = 0.2 + \frac{N_B}{5}$ hours.
+
+The total time $t$ must satisfy $t \ge T_A$ and $t \ge T_B$. To minimize $t$, we want to minimize $\max(T_A, T_B)$. This occurs when $T_A \approx T_B$, or when we find the integer pair $(N_A, N_B)$ that minimizes the maximum of their respective completion times.
+
+### Step 1: Analyze the Continuous Case (Ignoring Integer Constraints)
+
+Let's first find the optimal split ignoring the integer constraint to see where the balance lies.
+Set $T_A = T_B$:
+$$0.5 + \frac{N_A}{8} = 0.2 + \frac{N_B}{5}$$
+Since $N_B = 120 - N_A$:
+$$0.5 + \frac{N_A}{8} = 0.2 + \frac{120 - N_A}{5}$$
+$$0.3 + \frac{N_A}{8} = \frac{120 - N_A}{5}$$
+Multiply by 40 (LCM of 8 and 5) to clear denominators:
+$$40(0.3) + 5N_A = 8(120 - N_A)$$
+$$12 + 5N_A = 960 - 8N_A$$
+$$13N_A = 948$$
+$$N_A = \frac{948}{13} \approx 72.92$$
+
+So, the optimal continuous split is approximately $N_A = 73$ and $N_B = 47$.
+Since $N_A$ must be an integer, we should check the integer values around 72.92. Specifically, we need to check $N_A = 72$ and $N_A = 73$.
+
+### Step 2: Check Integer Completions
+
+We calculate the completion times for the two closest integer splits.
+
+**Case 1: $N_A = 72$ parts (Machine A), $N_B = 48$ parts (Machine B)**
+
+*   **Machine A:**
+    *   Parts: 72
+    *   Production time: $72 / 8 = 9$ hours
+    *   Total time $T_A = 0.5 + 9 = 9.5$ hours
+*   **Machine B:**
+    *   Parts: 48
+    *   Production time: $48 / 5 = 9.6$ hours
+    *   Total time $T_B = 0.2 + 9.6 = 9.8$ hours
+*   **Completion Time:** $\max(9.5, 9.8) = 9.8$ hours
+
+**Case 2: $N_A = 73$ parts (Machine A), $N_B = 47$ parts (Machine B)**
+
+*   **Machine A:**
+    *   Parts: 73
+    *   Production time: $73 / 8 = 9.125$ hours
+    *   Total time $T_A = 0.5 + 9.125 = 9.625$ hours
+*   **Machine B:**
+    *   Parts: 47
+    *   Production time: $47 / 5 = 9.4$ hours
+    *   Total time $T_B = 0.2 + 9.4 = 9.6$ hours
+*   **Completion Time:** $\max(9.625, 9.6) = 9.625$ hours
+
+**Case 3: Check $N_A = 74$ parts (Machine A), $N_B = 46$ parts (Machine B)**
+*   **Machine A:**
+    *   Parts: 74
+    *   Production time: $74 / 8 = 9.25$ hours
+    *   Total time $T_A = 0.5 + 9.25 = 9.75$ hours
+*   **Machine B:**
+    *   Parts: 46
+    *   Production time: $46 / 5 = 9.2$ hours
+    *   Total time $T_B = 0.2 + 9.2 = 9.4$ hours
+*   **Completion Time:** $\max(9.75, 9.4) = 9.75$ hours
+
+**Case 4: Check $N_A = 71$ parts (Machine A), $N_B = 49$ parts (Machine B)**
+*   **Machine A:**
+    *   Parts: 71
+    *   Production time: $71 / 8 = 8.875$ hours
+    *   Total time $T_A = 0.5 + 8.875 = 9.375$ hours
+*   **Machine B:**
+    *   Parts: 49
+    *   Production time: $49 / 5 = 9.8$ hours
+    *   Total time $T_B = 0.2 + 9.8 = 10.0$ hours
+*   **Completion Time:** $\max(9.375, 10.0) = 10.0$ hours
+
+### Step 3: Comparison and Conclusion
+
+Let's summarize the completion times ($T_{total}$) for the relevant integer splits near the continuous optimum:
+
+| $N_A$ | $N_B$ | $T_A$ (hours) | $T_B$ (hours) | $T_{total} = \max(T_A, T_B)$ |
+| :--- | :--- | :--- | :--- | :--- |
+| 71 | 49 | 9.375 | 10.0 | **10.0** |
+| 72 | 48 | 9.5 | 9.8 | **9.8** |
+| 73 | 47 | 9.625 | 9.6 | **9.625** |
+| 74 | 46 | 9.75 | 9.4 | **9.75** |
+| 75 | 45 | 9.875 | 9.2 | **9.875** |
+
+The minimum completion time occurs at **$N_A = 73$** and **$N_B = 47$**.
+
+The completion time is **9.625 hours**.
+
+### Step 4: Check the Immediately Preceding Completion Time
+
+The question asks to check the "immediately preceding completion time." This refers to the integer allocation that yields the next lowest time or the time associated with the integer split closest to the optimal one in the other direction.
+
+Looking at the table above:
+*   The optimal integer split is $N_A=73, N_B=47$ with time **9.625 hours**.
+*   The "preceding" integer split in terms of $N_A$ (going down from 73 to 72) is $N_A=72, N_B=48$.
+*   The time for this split is **9.8 hours**.
+
+Alternatively, if "preceding" implies the time *before* the optimal time in a chronological sense, it might refer to checking if a lower time is possible. However, since we checked all integer neighbors ($N_A=71, 72, 73, 74$), the lowest time is clearly 9.625. The next lowest time among the feasible integer splits is 9.8 hours (from $N_A=72$).
+
+Let's convert 9.625 hours to hours and minutes for clarity.
+$0.625 \text{ hours} = 0.625 \times 60 \text{ minutes} = 37.5 \text{ minutes}$.
+So, 9.625 hours = **9 hours and 37.5 minutes**.
+
+The preceding integer split ($N_A=72$) takes 9.8 hours.
+$0.8 \text{ hours} = 0.8 \times 60 \text{ minutes} = 48 \text{ minutes}$.
+So, 9.8 hours = **9 hours and 48 minutes**.
+
+### Final Answer
+
+The earliest time all 120 parts can be finished is **9.625 hours** (or **9 hours and 37.5 minutes**).
+
+This is achieved by assigning **73 parts to Machine A** and **47 parts to Machine B**.
+
+**Arithmetic Summary:**
+1.  **Optimal Split:** $N_A=73, N_B=47$.
+2.  **Machine A Time:** $0.5 \text{ h} + \frac{73}{8} \text{ h} = 0.5 + 9.125 = 9.625 \text{ h}$.
+3.  **Machine B Time:** $0.2 \text{ h} + \frac{47}{5} \text{ h} = 0.2 + 9.4 = 9.6 \text{ h}$.
+4.  **Total Time:** $\max(9.625, 9.6) = 9.625 \text{ h}$.
+5.  **Preceding Check:** The next best integer split ($N_A=72, N_B=48$) takes $\max(9.5, 9.8) = 9.8 \text{ h}$, which is slower.

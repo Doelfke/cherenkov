@@ -1,0 +1,35 @@
+# Run: cherenkov serve /path/to/model --config cherenkov.example.toml
+# Explicit CLI flags override this file, including after reload.
+
+[server]
+# model_dir = "/path/to/model" # Omitted: use the pinned managed model.
+# root = "/Volumes/Models/cherenkov" # Omitted: XDG data, cache and config directories.
+port = 8080
+# socket = "/private/path/control.sock" # Default: private directory under TMPDIR.
+drafts = 2
+
+[limits]
+# Decimal GB: Metal buffers plus reserved CPU prefix cache, not total process RSS.
+memory_gb = 25.0
+context_tokens = 2048
+prefix_cache_mib = 512
+cache_max_entries = 16
+cache_idle_seconds = 900 # 0 disables expiry; size limits still apply.
+queued_requests = 8
+http_readers = 32
+request_bytes = 4194304
+max_output_tokens = 262144 # Also constrained by the remaining context.
+
+[defaults]
+# This section can be reloaded. Requests already accepted keep their snapshot.
+max_tokens = 64
+no_eos = false
+stream = false
+include_usage = false
+
+[experts]
+resident_bits = 4
+# miss_bits = 2 # Omitted: follows resident_bits. Mixed mode requires residents=4.
+pool_gb = "adaptive" # Positive decimal GB, "adaptive", or "max".
+cut_weak = 0.0 # Nonzero permits skipping late weak experts; output may vary.
+build_missing_store = true # false: fail startup if selected low-bit store is unusable.

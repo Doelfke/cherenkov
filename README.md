@@ -1,0 +1,191 @@
+# Cherenkov
+
+A fast Rust and Metal inference engine for experimental Qwen4 MoE models
+(`qwen4_exp`) on memory-constrained Apple devices. It runs from the 4-bit
+quantized checkpoint, streaming experts from SSD into a bounded GPU cache.
+Tested on a 32 GB M4 MacBook Air at about 21 GB of Metal allocations.
+
+## Get started
+
+Runs on Apple Silicon and macOS. To build from source, install the Xcode
+command-line tools and [Mise](https://mise.jdx.dev/).
+
+```sh
+mise install
+mise exec -- cargo build --release
+target/release/cherenkov download
+target/release/cherenkov pack
+target/release/cherenkov serve
+```
+
+The `download` command fetches the supported
+[MLX 4-bit checkpoint](https://huggingface.co/Sawfwair/Qwen3.8-Flash-Next-MLX-4bit)
+from Hugging Face and caches it locally. The built-in packer rearranges
+its quantized weights into aligned records, preserving their bits.
+No Python or MLX runtime is required.
+Allow roughly 210 GB for the download and packed store. See
+[storage and downloads](docs/storage.md) for paths, `HF_TOKEN`, and local models.
+The upstream BF16 checkpoint still needs importer support.
+
+## Benchmarks
+
+<!-- benchmarks:start -->
+
+Measured on Apple M4 with 32 GiB memory; 20.98 GB reported Metal allocation.
+Saved revision `93c514f`; 80 valid samples.
+
+Loading and store construction are excluded. Answer lengths vary;
+compare completion times in the full report.
+
+[Full report](results/baseline-2026-09-09/report.json).
+
+| Experts | code tg/s | code-lru tg/s | debug-bisect tg/s | prose tg/s | reasoning tg/s | structured tg/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4-bit | 8.52 | 7.07 | 7.06 | 7.71 | 6.77 | 7.88 |
+| 4-bit / 2-bit misses + cut | 8.29 | 8.03 | 7.96 | 8.92 | 8.05 | 9.33 |
+| 3-bit | 12.13 | 10.72 | 10.27 | 9.83 | 10.86 | 12.67 |
+| 2-bit | 17.38 | 15.23 | 13.54 | 11.73 | 13.00 | 20.17 |
+
+| Experts | prefill-long pp/s |
+| --- | ---: |
+| 4-bit | 83.20 |
+| 4-bit / 2-bit misses + cut | 77.80 |
+| 3-bit | 75.80 |
+| 2-bit | 78.90 |
+
+Lower precision changes outputs. Measurements belong to the saved revision;
+see current validation for subsequent changes. Metal allocation is reported
+after prefill scratch release, not at its transient peak.
+
+Settings with a deadline cut are not reproducible.
+
+This baseline used Q4 batched prefill in every expert mode. Later
+prefill changes are measured separately.
+
+[All timings and outputs](results/baseline-2026-09-09/gallery.html).
+
+### Pelicans
+
+Unedited model outputs from the same run.
+
+| 4-bit | 4-bit / 2-bit misses + cut |
+| --- | --- |
+| ![Pelican](results/baseline-2026-09-09/pelicans/exact-4bit.svg) | ![Pelican](results/baseline-2026-09-09/pelicans/misses-2bit.svg) |
+
+| 3-bit | 2-bit |
+| --- | --- |
+| ![Pelican](results/baseline-2026-09-09/pelicans/all-3bit.svg) | ![Pelican](results/baseline-2026-09-09/pelicans/all-2bit.svg) |
+<!-- benchmarks:end -->
+
+Run the full suite, save its answers and pelicans, and refresh this section:
+
+```sh
+cargo xtask bench /path/to/model --build-stores --update-readme
+# Regenerate from a completed run without inference:
+cargo xtask readme results/baseline-2026-09-09
+```
+
+All outputs live in `results/`. See the [benchmark method](benchmarks/README.md),
+[paired prefill measurements](results/prefill-lowbit-2026-09-09/README.md),
+and [current validation](docs/validation.md).
+
+## Run
+
+**Server:** `serve` keeps the model loaded and caches repeated prompt prefixes.
+Connect an OpenAI-compatible client to `http://127.0.0.1:8080/v1` with model
+`cherenkov` and temperature `0`. Chat and text completions support streaming;
+generation runs one request at a time. Chat currently uses a non-thinking
+wrapper; native reasoning-effort controls are not implemented.
+
+**CLI:** pass a model directory and prompt to generate directly.
+
+```sh
+target/release/cherenkov /path/to/model 'Explain hash collisions.' --max-tokens 256
+target/release/cherenkov /path/to/model 'Explain hash collisions.' --experts 3
+target/release/cherenkov status
+target/release/cherenkov --help
+```
+
+## Options
+
+The default is **4-bit experts with two adaptive speculative drafts**.
+
+| Option | Effect |
+| --- | --- |
+| `--experts 4\|3\|2` | Routed-expert precision in prefill and decode. Lower precision trades accuracy for speed. |
+| `--miss-experts 2` | Fetch new misses at 2-bit in Q4 mode. |
+| `--drafts N` | Speculative drafts, 0–3; `0` disables speculation. |
+| `--max-tokens N` | Maximum generated tokens; default 64. |
+| `--max-ctx N` | Context capacity; default 2,048. Larger contexts leave less memory for experts. |
+| `--pool-gb N` | Expert-pool memory budget; adaptive by default. |
+| `--raw` | CLI only: use the prompt without the chat template. |
+| `--cut-weak W` | Skip late weak experts; output then depends on disk timing. Off by default. |
+
+Prepare low-bit expert stores ahead of inference:
+
+```sh
+target/release/cherenkov pack --experts 3       # 3-bit only
+target/release/cherenkov pack --experts 2       # 2-bit only
+target/release/cherenkov pack --experts 2,3     # both in one pass
+```
+
+Add a model path after `pack` to use a local checkpoint. The 4-bit base
+is built if needed and retained; selected low-bit stores coexist beside
+it. Allow about 39 GB extra for 2-bit, 54 GB for 3-bit, or 93 GB for both.
+Existing stores are reused. Inference also builds a missing variant on
+first use.
+
+[Server configuration](docs/server-config.md) covers TOML defaults, memory
+limits, cache policy and reloads. See [running options](docs/running.md)
+for the full interface.
+
+## How it works
+
+These are active parts of the default engine:
+
+- **MTP speculation.** The checkpoint's own multi-token prediction head proposes
+  up to two tokens. The trunk verifies them together and commits the accepted
+  prefix, restoring recurrent state after a rejection. The first draft shares
+  the trunk's command buffer; a second is chained after full acceptance.
+- **Speculative routing.** A one-block lookahead predicts which experts the next
+  block will need and starts background reads. Actual routing still determines
+  which experts run. Required misses take priority over speculative reads.
+- **Expert cache.** An adaptive, resident LRU pool keeps recently used experts
+  in unified memory. The GPU computes cached experts while CPU threads read
+  missing records directly into free pool slots.
+- **Block address tables.** Each block forms the union of experts needed by its
+  token and draft rows. A table maps those experts to GPU cache addresses and
+  tags their precision; separate per-row weights preserve each token's routing.
+  Kernels follow the table, so experts can change cache slots without moving
+  the rest of the model.
+- **Shared page mappings.** Packed dense weights are memory-mapped and exposed
+  to Metal without a second copy. The expert pool also shares CPU/GPU pages:
+  disk reads fill the same memory the kernels consume. Events keep the GPU
+  from reading unfinished records and the CPU from overwriting active slots.
+- **Custom Metal kernels.** Quantized projections, expert dispatch, sparse
+  attention, DeltaNet, PLE and MTP run in native kernels. Longer prompts use
+  batched matrix kernels and a bounded expert streaming ring.
+- **N-gram offloading.** The large n-gram embedding table stays in an SSD-backed
+  mapping. CPU threads prefetch the selected rows through the OS page cache,
+  then dequantize them into small shared buffers for the GPU's PLE blocks.
+  Only those gathered embeddings occupy GPU buffers.
+- **Prefix caching in server mode.** Repeated prompts restore attention,
+  recurrent and MTP state, then process only the uncached suffix. Memory,
+  entry count and idle expiry are bounded.
+
+**Lower-bit experts are opt-in.** `--experts 3` or `--experts 2` compresses
+routed experts in both prefill and decode. With `--miss-experts 2`, Q4
+lookahead reads continue normally, while unpredicted misses fetch smaller
+2-bit records just in time. A fetched record keeps its precision while cached;
+the block table selects the matching kernel. Shared experts and dense
+projections retain their original precision. Lower-bit stores are derived
+once from Q4 and reused; no quantization happens in the decode loop.
+
+See the [engine guide](docs/engine.md) for the address-table layout and
+synchronization. Direct file-backed expert residency is a separate developer
+option; the default uses the shared pool described above.
+
+## License
+
+[MIT](LICENSE), with [third-party notices](docs/third-party-notices.txt).
+Model weights have their own license.

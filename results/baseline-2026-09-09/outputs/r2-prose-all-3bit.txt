@@ -1,0 +1,34 @@
+### Why Hash Tables Need to Handle Collisions
+
+A hash table needs to handle collisions because **the number of possible keys is typically much larger than the number of available storage slots (buckets) in the underlying array.**
+
+Here is the logical breakdown:
+
+1.  **Finite Storage:** A hash table uses an array of fixed size (e.g., 100 slots).
+2.  **Infinite/Large Key Space:** The keys you want to store (e.g., strings, integers) are often numerous or infinite in variety.
+3.  **The Pigeonhole Principle:** If you have more items to store than you have slots, at least two items must share the same slot.
+4.  **Hash Function Mapping:** A hash function maps keys to indices. Since the input space is larger than the output space (indices), different keys can mathematically produce the same index.
+
+If collisions were not handled, data would be overwritten or lost when two keys hash to the same index.
+
+---
+
+### Short Example
+
+Imagine a hash table with **2 slots** (indices `0` and `1`) and a simple hash function: `hash(key) = key % 2`.
+
+1.  **Insert Key `10`:**
+    *   `10 % 2 = 0`
+    *   Store `10` at index `0`.
+    *   *Table:* `[0: 10, 1: empty]`
+
+2.  **Insert Key `12`:**
+    *   `12 % 2 = 0`
+    *   **Collision!** Index `0` is already occupied by `10`.
+    *   If we didn’t handle collisions, `12` would overwrite `10`, or `10` would be inaccessible.
+
+**How it’s handled:**
+*   **Chaining:** Store both `10` and `12` in a linked list at index `0`.
+*   **Open Addressing:** Place `12` in the next available slot (e.g., index `1`).
+
+Without collision handling, the second key could not be stored correctly alongside the first.

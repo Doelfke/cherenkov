@@ -1,0 +1,73 @@
+```python
+class ListNode:
+    """Definition for a singly-linked list node."""
+    def __init__(self, val=0, next=None):
+        self.val = val
+        self.next = next
+
+
+def reverse_linked_list(head: ListNode) -> ListNode:
+    """
+    Reverses a singly linked list and returns the new head.
+    
+    Args:
+        head: The head node of the linked list.
+        
+    Returns:
+        The new head node of the reversed linked list.
+    """
+    prev = None
+    current = head
+    
+    while current:
+        next_node = current.next  # Save the next node
+        current.next = prev       # Reverse the link
+        prev = current            # Move prev one step forward
+        current = next_node       # Move current one step forward
+    
+    return prev  # prev is the new head
+
+
+def list_to_array(head: ListNode) -> list:
+    """Helper function to convert linked list to array for testing."""
+    result = []
+    current = head
+    while current:
+        result.append(current.val)
+        current = current.next
+    return result
+
+
+def array_to_list(arr: list) -> ListNode:
+    """Helper function to convert array to linked list for testing."""
+    if not arr:
+        return None
+    head = ListNode(arr[0])
+    current = head
+    for val in arr[1:]:
+        current.next = ListNode(val)
+        current = current.next
+    return head
+
+
+if __name__ == "__main__":
+    # Test case 1: [1, 2, 3, 4, 5] -> [5, 4, 3, 2, 1]
+    head = array_to_list([1, 2, 3, 4, 5])
+    reversed_head = reverse_linked_list(head)
+    print(list_to_array(reversed_head))  # Expected: [5, 4, 3, 2, 1]
+    
+    # Test case 2: [] -> []
+    head = array_to_list([])
+    reversed_head = reverse_linked_list(head)
+    print(list_to_array(reversed_head))  # Expected: []
+    
+    # Test case 3: [1] -> [1]
+    head = array_to_list([1])
+    reversed_head = reverse_linked_list(head)
+    print(list_to_array(reversed_head))  # Expected: [1]
+    
+    # Test case 4: [1, 2] -> [2, 1]
+    head = array_to_list([1, 2])
+    reversed_head = reverse_linked_list(head)
+    print(list_to_array(reversed_head))  # Expected: [2, 1]
+```

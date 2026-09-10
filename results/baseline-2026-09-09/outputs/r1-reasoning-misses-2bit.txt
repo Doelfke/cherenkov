@@ -1,0 +1,158 @@
+To determine the earliest time all 120 parts can be finished, we must analyze the production rates, setup times, and the constraint that partial parts do not count (meaning machines stop producing once their specific quota is met, or we calculate the time required to produce integer numbers of parts).
+
+### Step 1: Analyze Machine A
+
+*   **Rate:** 8 parts per hour.
+*   **Setup Time:** 30 minutes = $0.5$ hours.
+*   **Production Start Time:** $0.5$ hours.
+
+Let $t$ be the total time in hours.
+The time Machine A spends actually producing is $(t - 0.5)$ hours.
+The number of parts produced by Machine A, $N_A$, must be an integer.
+$$ N_A = \lfloor 8 \times (t - 0.5) \rfloor $$
+*(Note: Since the rate is constant and we are looking for the completion time of specific integer counts, we can also think about this as: Time to produce $k$ parts = Setup + $\frac{k}{8}$ hours.)*
+
+### Step 2: Analyze Machine B
+
+*   **Rate:** 5 parts per hour.
+*   **Setup Time:** 12 minutes = $\frac{12}{60}$ hours = $0.2$ hours.
+*   **Production Start Time:** $0.2$ hours.
+
+The time Machine B spends actually producing is $(t - 0.2)$ hours.
+The number of parts produced by Machine B, $N_B$, must be an integer.
+$$ N_B = \lfloor 5 \times (t - 0.2) \rfloor $$
+*(Similarly: Time to produce $k$ parts = Setup + $\frac{k}{5}$ hours.)*
+
+### Step 3: Determine the Optimal Allocation of Parts
+
+We need $N_A + N_B = 120$.
+We want to minimize the total time $T$ such that:
+$$ T \ge 0.5 + \frac{N_A}{8} $$
+$$ T \ge 0.2 + \frac{N_B}{5} $$
+
+Since both machines run simultaneously, the total time is determined by the machine that finishes its assigned quota last. To minimize the total time, we should balance the load so that both machines finish as close to the same time as possible, or determine which allocation minimizes the maximum of the two completion times.
+
+Let's test integer values for $N_A$ and $N_B$ such that $N_A + N_B = 120$.
+Let $N_A = k$. Then $N_B = 120 - k$.
+
+The completion time for Machine A ($T_A$) given $k$ parts:
+$$ T_A(k) = 0.5 + \frac{k}{8} $$
+
+The completion time for Machine B ($T_B$) given $120-k$ parts:
+$$ T_B(k) = 0.2 + \frac{120 - k}{5} $$
+
+We want to find the integer $k$ that minimizes $\max(T_A(k), T_B(k))$.
+
+Let's find the point where $T_A(k) \approx T_B(k)$ to find the optimal balance.
+$$ 0.5 + \frac{k}{8} = 0.2 + \frac{120 - k}{5} $$
+$$ 0.3 + \frac{k}{8} = \frac{120}{5} - \frac{k}{5} $$
+$$ 0.3 + \frac{k}{8} = 24 - \frac{k}{5} $$
+$$ \frac{k}{8} + \frac{k}{5} = 23.7 $$
+$$ \frac{5k + 8k}{40} = 23.7 $$
+$$ \frac{13k}{40} = 23.7 $$
+$$ 13k = 948 $$
+$$ k \approx 72.92 $$
+
+Since $k$ must be an integer, we test the integers closest to 72.92: **$k = 73$** and **$k = 72$**.
+
+#### Case 1: $k = 73$ (Machine A makes 73, Machine B makes 47)
+*   **Machine A:**
+    *   Parts: 73
+    *   Production Time: $73 / 8 = 9.125$ hours
+    *   Total Time $T_A = 0.5 + 9.125 = 9.625$ hours
+*   **Machine B:**
+    *   Parts: 47
+    *   Production Time: $47 / 5 = 9.4$ hours
+    *   Total Time $T_B = 0.2 + 9.4 = 9.6$ hours
+*   **Completion Time:** $\max(9.625, 9.6) = 9.625$ hours.
+
+#### Case 2: $k = 72$ (Machine A makes 72, Machine B makes 48)
+*   **Machine A:**
+    *   Parts: 72
+    *   Production Time: $72 / 8 = 9$ hours
+    *   Total Time $T_A = 0.5 + 9 = 9.5$ hours
+*   **Machine B:**
+    *   Parts: 48
+    *   Production Time: $48 / 5 = 9.6$ hours
+    *   Total Time $T_B = 0.2 + 9.6 = 9.8$ hours
+*   **Completion Time:** $\max(9.5, 9.8) = 9.8$ hours.
+
+Comparing Case 1 and Case 2, Case 1 ($k=73$) yields a shorter time ($9.625$ vs $9.8$).
+
+Let's check if moving further away from the balance point helps.
+If $k=74$ (A: 74, B: 46):
+*   $T_A = 0.5 + 74/8 = 0.5 + 9.25 = 9.75$
+*   $T_B = 0.2 + 46/5 = 0.2 + 9.2 = 9.4$
+*   Max Time = $9.75$ hours. (Worse than 9.625)
+
+If $k=71$ (A: 71, B: 49):
+*   $T_A = 0.5 + 71/8 = 0.5 + 8.875 = 9.375$
+*   $T_B = 0.2 + 49/5 = 0.2 + 9.8 = 10.0$
+*   Max Time = $10.0$ hours. (Worse than 9.625)
+
+The minimum time occurs when Machine A produces 73 parts and Machine B produces 47 parts.
+
+### Step 4: Calculate Final Time and Convert Units
+
+The earliest completion time is **9.625 hours**.
+
+To convert this to hours and minutes:
+*   Integer hours: 9 hours.
+*   Fractional hours: $0.625$ hours.
+*   Minutes: $0.625 \times 60 = 37.5$ minutes.
+
+So, the time is **9 hours and 37.5 minutes**.
+
+### Step 5: Check the Immediately Preceding Completion Time
+
+The question asks to "check the immediately preceding completion time." This implies checking the time required to finish the *previous* integer count of total parts (i.e., 119 parts) to ensure we haven't skipped a valid completion time or misunderstood the "partial parts do not count" constraint.
+
+However, "completion time" usually refers to the time when the *target* (120 parts) is reached. The "immediately preceding completion time" likely refers to the time when the **119th part** was finished, or potentially the time when the configuration for 119 parts was optimal.
+
+Let's interpret "immediately preceding completion time" as the time when the **119th part** is finished.
+
+To finish 119 parts, we need to find the optimal allocation for $N_A + N_B = 119$.
+Balance point calculation:
+$$ 0.5 + \frac{k}{8} = 0.2 + \frac{119 - k}{5} $$
+$$ 0.3 + \frac{k}{8} = 23.8 - \frac{k}{5} $$
+$$ \frac{13k}{40} = 23.5 $$
+$$ 13k = 940 \implies k \approx 72.3 $$
+
+Test integers $k=72$ and $k=73$.
+
+**Case A: $k=72$ (A: 72, B: 47)**
+*   $T_A = 0.5 + 72/8 = 9.5$ hours
+*   $T_B = 0.2 + 47/5 = 0.2 + 9.4 = 9.6$ hours
+*   Max Time = **9.6 hours**
+
+**Case B: $k=73$ (A: 73, B: 46)**
+*   $T_A = 0.5 + 73/8 = 9.625$ hours
+*   $T_B = 0.2 + 46/5 = 9.4$ hours
+*   Max Time = **9.625 hours**
+
+The optimal time to finish 119 parts is **9.6 hours** (with A making 72, B making 47).
+
+The optimal time to finish 120 parts is **9.625 hours** (with A making 73, B making 47).
+
+Note that between 9.6 hours and 9.625 hours, Machine A is working on its 73rd part (started at 9.5h, finishes at 9.625h) and Machine B is working on its 47th part (started at 9.4h, finishes at 9.6h).
+At $t=9.6$ hours, Machine B has finished its 47th part. Machine A has finished 72 parts (finished at 9.5h) and is working on the 73rd.
+At $t=9.625$ hours, Machine A finishes its 73rd part.
+Total parts at 9.6h: $72 (A) + 47 (B) = 119$.
+Total parts at 9.625h: $73 (A) + 47 (B) = 120$.
+
+### Conclusion
+
+**Arithmetic Summary:**
+1.  **Optimal Allocation:** Machine A produces 73 parts; Machine B produces 47 parts.
+2.  **Machine A Time:** Setup (0.5h) + Production ($73/8 = 9.125$h) = **9.625 hours**.
+3.  **Machine B Time:** Setup (0.2h) + Production ($47/5 = 9.4$h) = **9.6 hours**.
+4.  **System Completion Time:** Determined by the slower machine (Machine A) = **9.625 hours**.
+
+**Conversion:**
+$0.625 \text{ hours} \times 60 \text{ min/hour} = 37.5 \text{ minutes}$.
+
+**Check of Preceding Completion Time:**
+The time to finish 119 parts (optimal allocation A:72, B:47) is **9.6 hours** (or 9 hours 36 minutes).
+
+**Final Answer:**
+The earliest time all 120 parts can be finished is **9 hours and 37.5 minutes** (or 9.625 hours).

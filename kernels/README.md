@@ -1,0 +1,52 @@
+# Metal kernels
+
+Sources are grouped by subsystem, with related functions and their private
+helpers kept together. `common/` contains the dense projection, attention,
+and recurrent primitives. `qwen4_exp/` contains qwen4-exp's row-batched
+systems and their specialized helpers.
+
+`device/clock.metal` contains the dependent-FMA throttling probe used by
+`MetalContext`. It is compiled as a separate diagnostic library through
+the same assembler. Rust files contain no embedded Metal kernel bodies.
+
+| Common file | Responsibility |
+| --- | --- |
+| `quantized.metal` | Affine-Q4 prefill GEMMs, verify matvecs, half-stream staging |
+| `gemm.metal` | Half-input dense GEMM for attention |
+| `attention.metal` | QK norm/RoPE, q8 KV cache, prefill staging, decode partials/combine |
+| `deltanet.metal` | Causal convolution, gate preparation, recurrent scan and snapshots |
+| `elementwise.metal` | SiLU multiply, residual addition, copying |
+| `sampling.metal` | Token embeddings and greedy argmax |
+
+| qwen4-exp file | Responsibility |
+| --- | --- |
+| `types.metal` | Projection/group ABI types used across subsystems |
+| `quantized_rows.metal` | Q4 row helpers used by hyper-connections and experts |
+| `hyperconnection.metal` | Replication, norms, bottleneck projection, mixing, injection |
+| `experts.metal` | Router/top-k, address tables, Q2/Q3 helpers, gate/up/down/combine |
+| `expert_gemm.metal` | Q2/Q3 routed-expert prefill GEMMs, specialized for 8/16/32 token tiles |
+| `ple.metal` | N-gram gating and dilated convolution |
+| `mtp.metal` | Draft-head input folding |
+| `deltanet.metal` | Output normalization and sigmoid gating |
+| `qsa.metal` | Block indexing/selection and selected prefill/decode attention |
+| `rows.metal` | Zeroing, narrow projections, activation, gather/scatter, shared-expert addition |
+
+## Compilation and dependencies
+
+[`src/kernels.rs`](../src/kernels.rs) assembles two translation units at
+Rust compile time, plus the device probe library. The engine and GPU tests
+use those same constants.
+These files are fragments, not independently compiled Metal libraries.
+The assembler supplies `metal_stdlib`, the namespace, and `#line`
+directives so diagnostics point to the relevant file.
+
+In the qwen4-exp library, shared types precede all users, and Q4 row
+helpers precede hyper-connections and experts. Q2/Q3 helpers and address
+table helpers stay private to the expert file. There are no cross-library
+helper calls; both libraries still compile with the same Metal options.
+
+Keep specialization macros with their definitions and instantiations.
+The two-row Q4 helper deliberately matches the other Q4 helper's lane and
+reduction order. Similar-looking projection implementations use different
+precision and batching strategies; consolidating them requires separate
+numerical and performance validation.

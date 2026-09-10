@@ -1,0 +1,43 @@
+### Why Hash Tables Need to Handle Collisions
+
+To understand why collisions must be handled, we must first look at the fundamental mechanism of a hash table.
+
+**1. The Mapping Process**
+A hash table works by using a **hash function** to map keys (e.g., strings, integers) to specific indices in an array (often called "buckets" or "slots").
+$$ \text{Index} = \text{Hash}(\text{Key}) \pmod{\text{Array Size}} $$
+
+**2. The Problem: The Pigeonhole Principle**
+*   **Infinite Keys:** The number of possible keys (e.g., every possible string of text) is effectively infinite.
+*   **Finite Slots:** The hash table has a fixed, finite number of slots (e.g., 100 slots).
+
+Because you are trying to map an infinite set of inputs into a finite set of outputs, it is mathematically guaranteed that **two different keys will eventually produce the same hash index**.
+
+**3. The Consequence**
+If the hash table does not handle this collision, data loss occurs. If Key A and Key B both map to Index 5, and you simply overwrite Index 5 with Key B, you lose Key A. Therefore, the data structure must have a strategy (like chaining or open addressing) to store both items at that same location.
+
+---
+
+### Short Example
+
+Imagine a hash table with **3 slots** (Indices 0, 1, and 2).
+We use a simple hash function: $H(k) = k \pmod 3$.
+
+**Step 1: Inserting "Apple"**
+*   We want to store the value `5` associated with the key `"Apple"`.
+*   Let's assume the hash of `"Apple"` is **10**.
+*   Calculation: $10 \pmod 3 = 1$.
+*   **Action:** We place `("Apple", 5)` into **Slot 1**.
+
+**Step 2: Inserting "Banana" (The Collision)**
+*   We want to store the value `10` associated with the key `"Banana"`.
+*   Let's assume the hash of `"Banana"` is **13**.
+*   Calculation: $13 \pmod 3 = 1$.
+*   **Action:** We try to place `("Banana", 10)` into **Slot 1**.
+
+**The Collision:**
+Slot 1 is already occupied by `"Apple"`.
+*   **If we don't handle collisions:** We overwrite Slot 1 with `"Banana"`. If we later search for `"Apple"`, we will get the value `10` (incorrect) or find nothing.
+*   **If we handle collisions:** We use a technique like **Separate Chaining**. Slot 1 now holds a linked list: `[("Apple", 5) -> ("Banana", 10)]`. Both items are preserved and accessible.
+
+### Conclusion
+Hash tables must handle collisions because the hash function maps a vast space of keys into a small space of array indices. Without collision resolution strategies (like chaining or probing), the data structure would fail to store all unique keys correctly.

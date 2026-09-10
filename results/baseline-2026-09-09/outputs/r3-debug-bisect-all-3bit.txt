@@ -1,0 +1,142 @@
+# Debugging `lower_bound`
+
+## Analysis of Failures
+
+The original function has **three critical bugs**:
+
+### Bug 1: Incorrect `hi` initialization
+```python
+hi = len(a) - 1
+```
+This excludes the possibility that `target` is greater than all elements. If `target` exceeds every element, the correct answer is `len(a)`, but `hi` never reaches `len(a)`, so the function can never return `len(a)`.
+
+### Bug 2: Incorrect `lo` update in the `<` branch
+```python
+if a[mid] < target:
+    lo = mid  # Should be lo = mid + 1
+```
+When `a[mid] < target`, `mid` cannot be the answer (since `a[mid]` is *less* than `target`, not *at least* `target`). Setting `lo = mid` causes an **infinite loop** when `lo` and `hi` are adjacent (e.g., `lo=0, hi=1, mid=0` → `lo` stays `0` forever).
+
+### Bug 3: Incorrect `hi` update in the `else` branch
+```python
+else:
+    hi = mid - 1  # Should be hi = mid
+```
+When `a[mid] >= target`, `mid` **could** be the answer. Setting `hi = mid - 1` excludes `mid` from the search range, potentially skipping the correct answer.
+
+### Additional Issue: Empty array
+If `a` is empty, `len(a) - 1 = -1`, so `hi = -1` and `lo = 0`. The loop condition `lo < hi` is `0 < -1` → `False`, so it returns `0`, which is correct by coincidence. But the logic is fragile and doesn't properly handle the semantics.
+
+---
+
+## Corrected Implementation
+
+```python
+def lower_bound(a, target):
+    """
+    Return the first index i such that a[i] >= target,
+    or len(a) if no such index exists.
+    Assumes a is sorted in non-decreasing order.
+    """
+    lo, hi = 0, len(a)  # hi is exclusive upper bound
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if a[mid] < target:
+            lo = mid + 1   # mid cannot be the answer; search right half
+        else:
+            hi = mid       # mid could be the answer; search left half including mid
+    return lo
+```
+
+### Key fixes:
+| Aspect | Original | Corrected |
+|---|---|---|
+| `hi` init | `len(a) - 1` | `len(a)` (exclusive bound) |
+| `a[mid] < target` | `lo = mid` | `lo = mid + 1` |
+| `a[mid] >= target` | `hi = mid - 1` | `hi = mid` |
+
+---
+
+## Loop Invariant
+
+**Invariant:** At every iteration of the `while` loop, the answer (first index `i` with `a[i] >= target`, or `len(a)` if none exists) lies in the range `[lo, hi]`.
+
+- **Initialization:** Before the loop, `lo = 0` and `hi = len(a)`. The answer must be in `[0, len(a)]` — trivially true.
+- **Maintenance:**
+  - If `a[mid] < target`, then `mid` cannot be the answer (its value is too small), so the answer must be in `[mid+1, hi]`. Setting `lo = mid + 1` preserves the invariant.
+  - If `a[mid] >= target`, then `mid` *could* be the answer, but the answer could also be earlier. So the answer is in `[lo, mid]`. Setting `hi = mid` preserves the invariant.
+- **Termination:** When `lo == hi`, the range `[lo, hi]` contains exactly one candidate index `lo`. Since the invariant held throughout, `lo` is the correct answer.
+
+---
+
+## Runnable Tests
+
+```python
+def test_lower_bound():
+    # --- Empty array ---
+    assert lower_bound([], 5) == 0, "Empty array should return 0"
+
+    # --- Target smaller than all elements ---
+    assert lower_bound([1, 2, 3, 4, 5], 0) == 0, "Target below all → first index"
+
+    # --- Target larger than all elements ---
+    assert lower_bound([1, 2, 3, 4, 5], 6) == 5, "Target above all → len(a)"
+
+    # --- Target equals first element ---
+    assert lower_bound([1, 2, 3, 4, 5], 1) == 0, "Target equals first → 0"
+
+    # --- Target equals last element ---
+    assert lower_bound([1, 2, 3, 4, 5], 5) == 4, "Target equals last → last index"
+
+    # --- Target between elements ---
+    assert lower_bound([1, 3, 5, 7, 9], 4) == 2, "Target 4 → first >=4 is 5 at index 2"
+
+    # --- Duplicates: target matches duplicate value ---
+    assert lower_bound([1, 2, 2, 2, 3], 2) == 1, "Duplicates: first 2 is at index 1"
+
+    # --- Duplicates: target not present, falls between ---
+    assert lower_bound([1, 2, 2, 2, 3], 2.5) == 4, "Target 2.5 → first >=2.5 is 3 at index 4"
+
+    # --- All same values ---
+    assert lower_bound([7, 7, 7, 7], 7) == 0, "All same: first 7 is index 0"
+    assert lower_bound([7, 7, 7, 7], 6) == 0, "Target below all same → 0"
+    assert lower_bound([7, 7, 7, 7], 8) == 4, "Target above all same → len(a)"
+
+    # --- Single element ---
+    assert lower_bound([5], 5) == 0, "Single element, target matches"
+    assert lower_bound([5], 4) == 0, "Single element, target below"
+    assert lower_bound([5], 6) == 1, "Single element, target above"
+
+    # --- Two elements ---
+    assert lower_bound([1, 3], 2) == 1, "Target between two elements"
+    assert lower_bound([1, 3], 1) == 0, "Target equals first"
+    assert lower_bound([1, 3], 3) == 1, "Target equals second"
+
+    # --- Negative numbers ---
+    assert lower_bound([-5, -3, -1, 0, 2], -2) == 2, "Negative target → first >=-2 is -1 at index 2"
+
+    # --- Floats ---
+    assert lower_bound([1.0, 2.5, 3.7], 2.5) == 1, "Float target matches exactly"
+    assert lower_bound([1.0, 2.5, 3.7], 2.0) == 1, "Float target between"
+
+    print("All tests passed!")
+
+test_lower_bound()
+```
+
+### Expected Output
+```
+All tests passed!
+```
+
+---
+
+## Summary
+
+| Bug | Impact | Fix |
+|---|---|---|
+| `hi = len(a) - 1` | Cannot return `len(a)`; misses "target > all" case | `hi = len(a)` |
+| `lo = mid` when `a[mid] < target` | Infinite loop on adjacent indices | `lo = mid + 1` |
+| `hi = mid - 1` when `a[mid] >= target` | Skips valid candidates; may return wrong index | `hi = mid` |
+
+The corrected version uses the standard **binary search for lower bound** pattern with an **exclusive upper bound**, which cleanly handles all edge cases including empty arrays, duplicates, and out-of-range targets.

@@ -1,0 +1,1438 @@
+{
+  "binaries": {
+    "before": {
+      "path": "/private/tmp/cherenkov-before-lowbit-prefill",
+      "sha256": "41e2f348938237c84e2a4b6851342de430182eba0a38cc240ad5dc406183a36d"
+    },
+    "after": {
+      "path": "/path/to/cherenkov",
+      "sha256": "72f1c441be91357f7ca8d03d14ef0bd202f628622eee46e61783547a44957b87",
+      "archived_path": "/private/tmp/cherenkov-lowbit-prefill-measured"
+    }
+  },
+  "source_commit": "bba64ea0d92e2cc97a40738f650a031b724c83d9",
+  "source_diff": "diff --git a/README.md b/README.md\nindex 3b21623..8535eb5 100644\n--- a/README.md\n+++ b/README.md\n@@ -114,7 +114,14 @@ expert is skipped when its read arrives late. The executable warns when\n enabled. See the [current benchmark](results/baseline-2026-09-09/README.md)\n for measured settings and outputs; mixed-mode results using the deadline\n cut must not be attributed to precision alone.\n-Prefill's streaming expert path continues to use 4-bit source records.\n+Routed-expert precision now applies to batched prefill as well as decode.\n+Uniform 2/3-bit runs read the same compressed records in both phases.\n+In mixed mode, prefill preserves resident precision, fills its kept pool\n+entries at 4-bit, and streams transient misses at `--miss-experts` precision.\n+Shared experts and dense projections retain their existing precision.\n+This changes low-bit outputs relative to the saved baseline above, which\n+used 4-bit batched prefill; those baseline rates are historical measurements\n+of the earlier executable.\n \n The first 2- or 3-bit run builds a derived store and announces it before\n starting. Construction time is reported separately from inference.\ndiff --git a/benchmarks/prefill.py b/benchmarks/prefill.py\nnew file mode 100644\nindex 0000000..a97bce4\n--- /dev/null\n+++ b/benchmarks/prefill.py\n@@ -0,0 +1,86 @@\n+#!/usr/bin/env python3\n+\"\"\"Compare two binaries on prompt throughput; eight decode tokens check handoff.\"\"\"\n+import argparse\n+import json\n+import subprocess\n+import time\n+from pathlib import Path\n+\n+from run import ROOT, digest, parse_metrics, power\n+\n+\n+def main():\n+    parser = argparse.ArgumentParser(description=__doc__)\n+    parser.add_argument('--before', type=Path, required=True)\n+    parser.add_argument('--after', type=Path, required=True)\n+    parser.add_argument('--model', type=Path, required=True)\n+    parser.add_argument('--out', type=Path, required=True)\n+    parser.add_argument('--rounds', type=int, default=2)\n+    args = parser.parse_args()\n+    if args.rounds < 1:\n+        parser.error('--rounds must be positive')\n+    args.out.mkdir(parents=True, exist_ok=True)\n+    report_path = args.out / 'report.json'\n+    if report_path.exists():\n+        parser.error('output already contains a report; choose a new directory')\n+    binaries = {key: path.resolve() for key, path in [('before', args.before), ('after', args.after)]}\n+    sentence = 'The quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\\n'\n+    prompts = {str(n): sentence * n + '\\nSummarize this document in three sentences.' for n in [4, 20, 128]}\n+    report = {\n+        'binaries': {k: {'path': str(p), 'sha256': digest(p)} for k, p in binaries.items()},\n+        'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),\n+        'source_diff': subprocess.check_output(['git', 'diff', 'HEAD'], cwd=ROOT, text=True),\n+        'prompts': prompts,\n+        'notes': [\n+            'Fresh processes, max_ctx=8192, adaptive pool, two adaptive drafts, no prefix cache.',\n+            'Exactly eight decode tokens; this suite measures prefill, not complete answers or decode throughput.',\n+            'Loading/conversion excluded; any store build invalidates the sample.',\n+            'Power sampled at process boundaries; brief intervening changes may be missed.',\n+            'Configurations and binary order rotate. Existing OS file caches are not purged.',\n+            'Low-bit prefill changes output relative to the earlier Q4-prefill implementation.',\n+        ],\n+        'runs': [],\n+    }\n+    for round_index in range(args.rounds):\n+        bits_order = [4, 3, 2]\n+        bits_order = bits_order[round_index % 3:] + bits_order[:round_index % 3]\n+        for length, prompt in prompts.items():\n+            for bits in bits_order:\n+                order = ['before', 'after'] if round_index % 2 == 0 else ['after', 'before']\n+                for label in order:\n+                    name = f'r{round_index + 1}-repeat{length}-q{bits}-{label}'\n+                    command = [str(binaries[label]), str(args.model.resolve()), prompt,\n+                               '--experts', str(bits), '--max-ctx', '8192', '--max-tokens', '8', '--no-eos']\n+                    before = power()\n+                    if before['source'] != 'ac':\n+                        raise RuntimeError('benchmark requires AC power')\n+                    start = time.monotonic()\n+                    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=300)\n+                    after = power()\n+                    row = {'id': name, 'round': round_index + 1, 'binary': label, 'bits': bits,\n+                           'prompt': length, 'wall_seconds': time.monotonic() - start,\n+                           'power_before': before, 'power_after': after,\n+                           'exit_code': result.returncode, 'stderr': result.stderr,\n+                           'output': name + '.txt', 'valid': False}\n+                    (args.out / row['output']).write_text(result.stdout)\n+                    try:\n+                        if result.returncode:\n+                            raise ValueError('engine failed')\n+                        row['metrics'] = parse_metrics(result.stderr)\n+                        if row['metrics']['store_build_seconds'] is not None:\n+                            raise ValueError('sample built a store')\n+                        if after['source'] != 'ac':\n+                            raise ValueError('power changed')\n+                        row['valid'] = True\n+                    except ValueError as error:\n+                        row['error'] = str(error)\n+                    report['runs'].append(row)\n+                    report_path.write_text(json.dumps(report, indent=2) + '\\n')\n+                    metrics = row.get('metrics', {})\n+                    print(f\"{name}: {metrics.get('prompt_tokens')} tokens, {metrics.get('pp_s')} PP/s, valid={row['valid']}\", flush=True)\n+                    if not row['valid']:\n+                        raise RuntimeError(f'{name}: {row[\"error\"]}; details saved in {report_path}')\n+\n+\n+if __name__ == '__main__':\n+    main()\ndiff --git a/docs/engine.md b/docs/engine.md\nindex 8a33945..375e61a 100644\n--- a/docs/engine.md\n+++ b/docs/engine.md\n@@ -89,8 +89,21 @@ The GPU signals when it has finished consuming a group. The CPU waits\n for that signal before overwriting reused ring slots, fills the next\n group, and signals a separate event when the group is readable. Each\n prefill event has one writer and monotonically increasing values.\n-Prefill projections use the original 4-bit records even when decode\n-uses a derived low-bit store.\n+Routed-expert prefill and decode share the record-layout description and\n+store files. Batched prefill selects Q4 or Q2/Q3 GEMMs per record; its\n+8/16/32-token tiles stage dequantized half weights and accumulate in float.\n+Decode retains its specialized half-dot kernels and reduction order.\n+\n+Uniform low-bit runs fill the pool and streaming ring from that low-bit\n+store. Mixed mode preserves each resident slot's precision; new kept\n+records use the pool's default (4-bit), while transient ring misses use\n+`--miss-experts`. Records kept for decode need no second load. Ring slots\n+retain their original Q4-sized pitch so either format fits without changing\n+the allocation budget. The existing event handshake protects slot reuse.\n+Shared experts and dense projections remain Q4; deadline cuts remain in\n+the decode path. Prefill telemetry sums actual record bytes by precision.\n+The ring-wait counter measures CPU waiting for GPU consumption, not disk\n+read latency.\n \n ## Recurrent state and rollback\n \ndiff --git a/docs/validation.md b/docs/validation.md\nindex 6d67939..ae03092 100644\n--- a/docs/validation.md\n+++ b/docs/validation.md\n@@ -10,24 +10,32 @@ python3 -m unittest discover -s benchmarks -p 'test_*.py'\n cargo build --release --offline\n ```\n \n-The current cleanup passes formatting, Clippy with warnings denied, all\n-17 real-model Rust tests, and all seven benchmark tests. Fresh-process\n+The source cleanup passed formatting, Clippy with warnings denied, all\n+17 then-existing real-model Rust tests, and all seven benchmark tests. Fresh-process\n 64-token outputs match the executable saved before the Rust split at\n 4-, 3-, and 2-bit precision. A separate 139-token prompt exercises batched\n prefill and also produces identical 64-token output. These checks use\n context capacity 8,192 and are correctness comparisons, not timings.\n+The subsequent low-bit prefill change intentionally changes low-bit outputs;\n+those equality checks apply to the source cleanup before that change.\n \n ## GPU and model checks\n \n GPU tests require Metal. Model-dependent checks use `CHERENKOV_MODEL_DIR`,\n or the default local cache when available. Without a packed model those\n checks return early, so set the variable when validating model changes.\n+Low-bit GPU tests also require the corresponding cached `experts2.bin` and\n+`experts3.bin` files; they skip missing stores instead of building them.\n \n The test-only child modules cover:\n \n - QSA indexing, top-k ties, and selected attention against CPU/dense references.\n - Greedy argmax ties, grid-strided input, and a partial final block.\n - Real-weight prefill matrix projections against the CPU matvec.\n+- Q2/Q3 expert gate/up/down GEMMs against independently reconstructed\n+  original-code midpoints, including token-tile boundaries and output guards.\n+- Multi-chunk prefill through MTP verification and decode in Q4, Q3, Q2,\n+  and mixed Q4/Q2 modes; actual fetch bytes and resident precision are checked.\n - Prefix snapshot restoration of every hybrid-state region, including\n   recurrent/conv state, PLE histories, q8 KV scale planes, incomplete QSA\n   blocks, and MTP enabled/disabled.\ndiff --git a/kernels/README.md b/kernels/README.md\nindex c1a1158..9584291 100644\n--- a/kernels/README.md\n+++ b/kernels/README.md\n@@ -24,6 +24,7 @@ the same assembler. Rust files contain no embedded Metal kernel bodies.\n | `quantized_rows.metal` | Q4 row helpers used by hyper-connections and experts |\n | `hyperconnection.metal` | Replication, norms, bottleneck projection, mixing, injection |\n | `experts.metal` | Router/top-k, address tables, Q2/Q3 helpers, gate/up/down/combine |\n+| `expert_gemm.metal` | Q2/Q3 routed-expert prefill GEMMs, specialized for 8/16/32 token tiles |\n | `ple.metal` | N-gram gating and dilated convolution |\n | `mtp.metal` | Draft-head input folding |\n | `deltanet.metal` | Output normalization and sigmoid gating |\ndiff --git a/kernels/qwen4_exp/expert_gemm.metal b/kernels/qwen4_exp/expert_gemm.metal\nnew file mode 100644\nindex 0000000..5ac1680\n--- /dev/null\n+++ b/kernels/qwen4_exp/expert_gemm.metal\n@@ -0,0 +1,157 @@\n+// Low-bit routed-expert GEMMs: 128 output channels x 8/16/32 token rows.\n+// Uses the decode stores directly; shared/dense projections remain Q4.\n+// K is a multiple of 64, output channels a multiple of 8. The caller pads\n+// token buffers to the tile width, as for the existing Q4 GEMMs. Matrix\n+// staging/reduction follows those GEMMs; decode's half-dot math is separate.\n+\n+template <uint BITS, uint TOKENS>\n+[[kernel]] void fn_expert_qmm(\n+    device const uint*   w      [[buffer(0)]],\n+    device const bfloat* scales [[buffer(1)]],\n+    device const bfloat* biases [[buffer(2)]],\n+    device const float*  x      [[buffer(3)]],  // [NB][in_dim]\n+    device float*        y      [[buffer(4)]],  // [NB][out_dim]\n+    constant FnQmvParams&  p      [[buffer(5)]],\n+    constant uint&       ntt    [[buffer(6)]],\n+    uint tgpos [[threadgroup_position_in_grid]],\n+    uint tiitg [[thread_position_in_threadgroup]],\n+    uint sgitg [[simdgroup_index_in_threadgroup]])\n+{\n+    threadgroup half sa[128 * 32];\n+    threadgroup half sb[TOKENS * 32];\n+\n+    const uint r1 = (tgpos % ntt) * TOKENS;\n+    const uint r0 = (tgpos / ntt) * 128;\n+    const uint words_per_row = p.in_dim / 32 * BITS;\n+    constexpr uint TOKEN_FRAGMENTS = TOKENS / 8;\n+    const uint groups_per_row = p.in_dim / 64;\n+    // A-staging: two (row, 16-K-chunk) units per thread. Unit u covers\n+    // row = u / 2 and K-chunk il = u % 2 of the current 32-K slice.\n+    const uint u0 = tiitg * 2;\n+    // B-staging assignment: token + which 8-element K-chunk.\n+    const uint btok = tiitg / 4;\n+    const uint bky = 8 * (tiitg % 4);\n+    device const float* yb = x + (ulong)(r1 + btok) * p.in_dim + bky;\n+\n+    simdgroup_half8x8 ma[4];\n+    simdgroup_half8x8 mb[TOKEN_FRAGMENTS];\n+    simdgroup_float8x8 mc[4 * TOKEN_FRAGMENTS];\n+    for (short i = 0; i < 4 * TOKEN_FRAGMENTS; i++) {\n+        mc[i] = make_filled_simdgroup_matrix<float, 8>(0.f);\n+    }\n+\n+    for (uint loop_k = 0; loop_k < p.in_dim; loop_k += 32) {\n+        // Decode the same 32-code records used by the decode kernels.\n+        // Each staging unit owns 16 consecutive K values, unpacked four\n+        // even/odd codes at a time. Reconstruct Q4-code midpoints before\n+        // applying the original bf16 scale and bias, then stage as half.\n+        half4 de[2][2];\n+        half4 dodd[2][2];\n+        float4 xv[2];\n+        for (uint uu = 0; uu < 2; uu++) {\n+            const uint unit = u0 + uu;\n+            const uint ar = unit / 2;\n+            const uint il0 = unit % 2;\n+            const uint arow = min(r0 + ar, p.out_dim - 1);\n+            device const uint* chunk = w + (ulong)arow * words_per_row\n+                                          + (loop_k / 32) * BITS;\n+            uint upper = chunk[il0];\n+            uint lowest = 0;\n+            if (BITS == 3) lowest = chunk[2] >> (4 * il0);\n+            float4 s = (float)scales[(ulong)arow * groups_per_row + loop_k / 64];\n+            float4 b = (float)biases[(ulong)arow * groups_per_row + loop_k / 64];\n+            for (uint h = 0; h < 2; h++) {\n+                float4 even = float4(as_type<uchar4>((upper >> (2 * h)) & 0x03030303u));\n+                float4 odd = float4(as_type<uchar4>((upper >> (2 * (h + 2))) & 0x03030303u));\n+                if (BITS == 3) {\n+                    even = 2.0f * even + float4(as_type<uchar4>((lowest >> h) & 0x01010101u));\n+                    odd = 2.0f * odd + float4(as_type<uchar4>((lowest >> (h + 2)) & 0x01010101u));\n+                    even = 2.0f * even + 0.5f;\n+                    odd = 2.0f * odd + 0.5f;\n+                } else {\n+                    even = 4.0f * even + 1.5f;\n+                    odd = 4.0f * odd + 1.5f;\n+                }\n+                de[uu][h] = half4(fma(s, even, b));\n+                dodd[uu][h] = half4(fma(s, odd, b));\n+            }\n+        }\n+        if (btok < TOKENS) {\n+            xv[0] = *(device const float4*)(yb);\n+            xv[1] = *(device const float4*)(yb + 4);\n+        }\n+        threadgroup_barrier(mem_flags::mem_threadgroup);\n+        // Swizzled A store: 8x8 blocks, transposed within block (sa laid\n+        // out as 16 row-blocks x 4 K-blocks of 64 halves each). Even\n+        // nibbles land at K = 2i, odd at K = 2i+1 within each 8-half.\n+        for (uint uu = 0; uu < 2; uu++) {\n+            const uint unit = u0 + uu;\n+            const uint ar = unit / 2;\n+            const uint il0 = unit % 2;\n+            const uint sy = ar / 8;\n+            const uint lx = ar % 8;\n+            for (uint h = 0; h < 2; h++) {\n+                threadgroup half* base = sa + 64 * (16 * (2 * il0 + h) + sy) + lx;\n+                for (uint i = 0; i < 4; i++) {\n+                    base[8 * (2 * i)] = de[uu][h][i];\n+                    base[8 * (2 * i + 1)] = dodd[uu][h][i];\n+                }\n+            }\n+        }\n+        // B store: token-major 8x8 blocks.\n+        if (btok < TOKENS) {\n+            const uint ib = TOKEN_FRAGMENTS * (tiitg % 4) + btok / 8;\n+            const uint ly = btok % 8;\n+            for (uint i = 0; i < 4; i++) {\n+                *(sb + 64 * ib + 8 * ly + i) = (half)xv[0][i];\n+                *(sb + 64 * ib + 8 * ly + 4 + i) = (half)xv[1][i];\n+            }\n+        }\n+        yb += 32;\n+        threadgroup_barrier(mem_flags::mem_threadgroup);\n+\n+        // Each simdgroup owns 32 output rows and all token fragments.\n+        threadgroup const half* lsma = sa + 4 * 64 * sgitg;\n+        threadgroup const half* lsmb = sb;\n+        for (short ik = 0; ik < 4; ik++) {\n+            simdgroup_barrier(mem_flags::mem_none);\n+            for (short i = 0; i < 4; i++) {\n+                simdgroup_load(ma[i], lsma + 64 * i, 8, 0, false);\n+            }\n+            simdgroup_barrier(mem_flags::mem_none);\n+            for (short i = 0; i < TOKEN_FRAGMENTS; i++) {\n+                simdgroup_load(mb[i], lsmb + 64 * i, 8, 0, false);\n+            }\n+            simdgroup_barrier(mem_flags::mem_none);\n+            for (short i = 0; i < 4 * TOKEN_FRAGMENTS; i++) {\n+                simdgroup_multiply_accumulate(mc[i], mb[i / 4], ma[i % 4], mc[i]);\n+            }\n+            lsma += 16 * 64;\n+            lsmb += TOKEN_FRAGMENTS * 64;\n+        }\n+    }\n+\n+    const uint crow = r0 + 32 * sgitg;\n+    for (short i = 0; i < 4 * TOKEN_FRAGMENTS; i++) {\n+        if (crow + 8 * (i % 4) + 8 <= p.out_dim) {\n+            device float* c = y + crow + (ulong)(r1 + 8 * (i / 4)) * p.out_dim;\n+            simdgroup_store(mc[i], c + 8 * (i % 4), p.out_dim, 0, false);\n+        }\n+    }\n+}\n+\n+#define FN_EXPERT_QMM_ARGS \\\n+    device const uint*, device const bfloat*, device const bfloat*, \\\n+    device const float*, device float*, constant FnQmvParams&, constant uint&, \\\n+    uint, uint, uint\n+#define FN_EXPERT_QMM(B, T) \\\n+    template [[host_name(\"fn_expert_qmm_q\" #B \"_n\" #T)]] [[kernel]] \\\n+    void fn_expert_qmm<B, T>(FN_EXPERT_QMM_ARGS);\n+FN_EXPERT_QMM(2, 8)\n+FN_EXPERT_QMM(2, 16)\n+FN_EXPERT_QMM(2, 32)\n+FN_EXPERT_QMM(3, 8)\n+FN_EXPERT_QMM(3, 16)\n+FN_EXPERT_QMM(3, 32)\n+#undef FN_EXPERT_QMM\n+#undef FN_EXPERT_QMM_ARGS\ndiff --git a/src/qwen4_exp/gpu.rs b/src/qwen4_exp/gpu.rs\nindex d7a4391..6ef84d9 100644\n--- a/src/qwen4_exp/gpu.rs\n+++ b/src/qwen4_exp/gpu.rs\n@@ -237,6 +237,8 @@ struct Pipes {\n     qmm_n8: Pso,\n     qmm_n16: Pso,\n     qmm_w: Pso,\n+    /// [precision 2/3][token tile 8/16/32].\n+    expert_qmm: [[Pso; 3]; 2],\n     silu_mul: Pso,\n     attn_q_stage: Pso,\n     attn_kv_stage: Pso,\n@@ -250,25 +252,6 @@ struct Pipes {\n     qmv_small_b: Pso,\n }\n \n-/// The low-bit expert store (`experts3.bin` or `experts2.bin`, built\n-/// on demand by `super::lowbit`): record\n-/// stride and the byte offsets of the packed matrices and their scales.\n-#[derive(Clone, Copy)]\n-struct LowBitStore {\n-    /// 3 or 2.\n-    bits: u32,\n-    stride: usize,\n-    gate_w: u32,\n-    up_w: u32,\n-    down_w: u32,\n-    gate_s: u32,\n-    gate_b: u32,\n-    up_s: u32,\n-    up_b: u32,\n-    down_s: u32,\n-    down_b: u32,\n-}\n-\n /// One lookahead prediction and what became of it (CHERENKOV_DUMP_LA).\n #[derive(Clone, Copy, serde::Serialize)]\n pub struct LaEntry {\n@@ -417,13 +400,13 @@ pub struct Gpu<'a> {\n     /// Background read for the lookahead prediction of the next layer,\n     /// with the records to add to the set once it lands.\n     pending: Option<PendingRead>,\n-    /// Synchronous misses read the low-bit record\n+    /// Decode synchronous misses and prefill ring misses read the low-bit record\n     /// (--miss-experts 3|2) when the store exists; lookahead reads\n     /// stay 4-bit unless `all_low_bits`.\n-    low_bit_store: Option<LowBitStore>,\n+    low_bit_store: Option<super::lowbit::Layout>,\n     /// --experts 3|2: every expert record is low-bit, so the pool\n-    /// holds more of them and nothing reads the 4-bit file (prefill keeps\n-    /// streaming 4-bit records through its own ring).\n+    /// holds more of them. Prefill uses the same records and retains its\n+    /// most-used experts for decode.\n     pub all_low_bits: bool,\n     /// GPU <-> CPU handshake: the GPU signals after each layer's router and\n     /// waits for the CPU to publish that layer's pool slots in `slot_tab`.\ndiff --git a/src/qwen4_exp/gpu/experts.rs b/src/qwen4_exp/gpu/experts.rs\nindex 002c73c..6e1b7f0 100644\n--- a/src/qwen4_exp/gpu/experts.rs\n+++ b/src/qwen4_exp/gpu/experts.rs\n@@ -62,8 +62,8 @@ impl Gpu<'_> {\n     pub(super) fn experts_b(&self, enc: &Enc, moe: &Moe, slot_row: usize, nb: usize, part: u32) {\n         let c = &self.p.cfg;\n         let s = &self.scratch;\n-        let l = &self.p.manifest.experts;\n-        let inter = l.inter as u32;\n+        let l = super::super::lowbit::Layout::four_bit(&self.p.manifest.experts);\n+        let inter = self.p.manifest.experts.inter as u32;\n         let h = c.hidden_size as u32;\n         let k = c.num_experts_per_tok;\n         let shared = !self.skips(\"shared\");\n@@ -101,15 +101,15 @@ impl Gpu<'_> {\n             sh_down_b: moe.sd.b as u32,\n             sh_gate_vec: moe.shared_gate.0 as u32,\n             part,\n-            low_gate_w: self.low_bit_store.map_or(0, |s| s.gate_w),\n-            low_up_w: self.low_bit_store.map_or(0, |s| s.up_w),\n-            low_down_w: self.low_bit_store.map_or(0, |s| s.down_w),\n-            low_gate_s: self.low_bit_store.map_or(0, |s| s.gate_s),\n-            low_gate_b: self.low_bit_store.map_or(0, |s| s.gate_b),\n-            low_up_s: self.low_bit_store.map_or(0, |s| s.up_s),\n-            low_up_b: self.low_bit_store.map_or(0, |s| s.up_b),\n-            low_down_s: self.low_bit_store.map_or(0, |s| s.down_s),\n-            low_down_b: self.low_bit_store.map_or(0, |s| s.down_b),\n+            low_gate_w: self.low_bit_store.map_or(0, |s| s.gate_w as u32),\n+            low_up_w: self.low_bit_store.map_or(0, |s| s.up_w as u32),\n+            low_down_w: self.low_bit_store.map_or(0, |s| s.down_w as u32),\n+            low_gate_s: self.low_bit_store.map_or(0, |s| s.gate_s as u32),\n+            low_gate_b: self.low_bit_store.map_or(0, |s| s.gate_b as u32),\n+            low_up_s: self.low_bit_store.map_or(0, |s| s.up_s as u32),\n+            low_up_b: self.low_bit_store.map_or(0, |s| s.up_b as u32),\n+            low_down_s: self.low_bit_store.map_or(0, |s| s.down_s as u32),\n+            low_down_b: self.low_bit_store.map_or(0, |s| s.down_b as u32),\n         };\n         let n_exp = (n_max + 1) as usize;\n         let rows2 = 2 * inter as usize;\ndiff --git a/src/qwen4_exp/gpu/load.rs b/src/qwen4_exp/gpu/load.rs\nindex 58035d9..1580ae6 100644\n--- a/src/qwen4_exp/gpu/load.rs\n+++ b/src/qwen4_exp/gpu/load.rs\n@@ -43,8 +43,8 @@ impl<'a> Gpu<'a> {\n             \"indexer budget must be a multiple of the block size\"\n         );\n         anyhow::ensure!(\n-            c.moe_intermediate_size.is_multiple_of(32),\n-            \"expert width must be a multiple of 32\"\n+            c.moe_intermediate_size.is_multiple_of(64),\n+            \"expert width must be a multiple of the 64-code quantization group\"\n         );\n         anyhow::ensure!(\n             c.num_experts_per_tok * MAX_NB < SLOT_STRIDE,\n@@ -65,7 +65,15 @@ impl<'a> Gpu<'a> {\n                 ctx.pipeline(&blib, &format!(\"{base}4\"))?,\n             ])\n         };\n+        let expert_qmm = |bits| -> Result<[Pso; 3]> {\n+            Ok([\n+                ctx.pipeline(&blib, &format!(\"fn_expert_qmm_q{bits}_n8\"))?,\n+                ctx.pipeline(&blib, &format!(\"fn_expert_qmm_q{bits}_n16\"))?,\n+                ctx.pipeline(&blib, &format!(\"fn_expert_qmm_q{bits}_n32\"))?,\n+            ])\n+        };\n         let pipes = Pipes {\n+            expert_qmm: [expert_qmm(2)?, expert_qmm(3)?],\n             qmv_h: ctx.pipeline(&lib, \"qmv_multi_h\")?,\n             qmv_hn: ctx.pipeline(&lib, \"qmv_multi_hn\")?,\n             prep_h: ctx.pipeline(&lib, \"deinterleave_bh\")?,\n@@ -406,19 +414,7 @@ impl<'a> Gpu<'a> {\n             let low_path = p.dir.join(format!(\"experts{low_bits}.bin\"));\n             let low_file = std::fs::File::open(&low_path)\n                 .with_context(|| format!(\"opening {}\", low_path.display()))?;\n-            let st = LowBitStore {\n-                bits: low_bits,\n-                stride: l.stride,\n-                gate_w: l.gate_w as u32,\n-                up_w: l.up_w as u32,\n-                down_w: l.down_w as u32,\n-                gate_s: l.gate_s as u32,\n-                gate_b: l.gate_b as u32,\n-                up_s: l.up_s as u32,\n-                up_b: l.up_b as u32,\n-                down_s: l.down_s as u32,\n-                down_b: l.down_b as u32,\n-            };\n+            let st = l;\n             anyhow::ensure!(\n                 st.stride > 0 && st.stride <= stride,\n                 \"{low_bits}-bit record stride {} does not fit a 4-bit slot\",\ndiff --git a/src/qwen4_exp/gpu/prefill.rs b/src/qwen4_exp/gpu/prefill.rs\nindex 38c40e0..8671930 100644\n--- a/src/qwen4_exp/gpu/prefill.rs\n+++ b/src/qwen4_exp/gpu/prefill.rs\n@@ -37,6 +37,8 @@ pub struct ChunkStats {\n     pub secs: f64,\n     /// Expert records read from disk (ring + pool).\n     pub fetched: usize,\n+    /// Bytes read in each record's stored precision.\n+    pub fetched_bytes: usize,\n     /// Seconds the fetch thread waited for ring slots.\n     pub wait_s: f64,\n     /// GPU seconds: DeltaNet blocks, attention blocks, expert streams, MTP.\n@@ -115,7 +117,7 @@ pub const ROW_BYTES: usize = 560 * 1024;\n impl<'a> Gpu<'a> {\n     /// One decoder block over t rows of `hyper`: everything up to the\n     /// router in one command buffer, then the expert stream. Returns\n-    /// (records fetched, ring wait seconds, block GPU seconds, expert\n+    /// (records fetched, bytes fetched, ring wait seconds, block GPU seconds, expert\n     /// stream GPU seconds).\n     #[allow(clippy::too_many_arguments)]\n     fn pf_layer(\n@@ -126,7 +128,7 @@ impl<'a> Gpu<'a> {\n         pf: &PrefillScratch,\n         hyper: &Buf,\n         pending: Option<&Buf>,\n-    ) -> Result<(usize, f64, f64, f64)> {\n+    ) -> Result<(usize, usize, f64, f64, f64)> {\n         let (moe, block_s) = {\n             let layer = match li {\n                 Some(li) => &self.layers[li],\n@@ -173,8 +175,8 @@ impl<'a> Gpu<'a> {\n                 cb.GPUEndTime() - cb.GPUStartTime(),\n             )\n         };\n-        let (fetched, wait_s, experts_s) = self.pf_experts(moe, t, pf)?;\n-        Ok((fetched, wait_s, block_s, experts_s))\n+        let (fetched, fetched_bytes, wait_s, experts_s) = self.pf_experts(moe, t, pf)?;\n+        Ok((fetched, fetched_bytes, wait_s, block_s, experts_s))\n     }\n \n     /// Run one prompt chunk at positions pos.. through the trunk and the\n@@ -266,9 +268,10 @@ impl<'a> Gpu<'a> {\n         let n_layers = self.layers.len().min(layer_cap());\n         for li in 0..n_layers {\n             let pending = if li > 0 { Some(&pf.moe_out) } else { None };\n-            let (f, w, block_s, experts_s) =\n+            let (f, bytes, w, block_s, experts_s) =\n                 self.pf_layer(Some(li), pos, t, &pf, &pf.hyper, pending)?;\n             st.fetched += f;\n+            st.fetched_bytes += bytes;\n             st.wait_s += w;\n             st.gpu_experts_s += experts_s;\n             if matches!(self.layers[li].mix, Mix::Delta(_)) {\n@@ -364,9 +367,10 @@ impl<'a> Gpu<'a> {\n                 cb.commit();\n                 cb.waitUntilCompleted();\n             }\n-            let (f, w, block_s, experts_s) =\n+            let (f, bytes, w, block_s, experts_s) =\n                 self.pf_layer(None, pos, t, &pf, &pf.mtp_hyper, None)?;\n             st.fetched += f;\n+            st.fetched_bytes += bytes;\n             st.wait_s += w;\n             st.gpu_mtp_s += block_s + experts_s;\n             let mtp = self.mtp.as_ref().unwrap();\ndiff --git a/src/qwen4_exp/gpu/prefill/experts.rs b/src/qwen4_exp/gpu/prefill/experts.rs\nindex daf88ec..bdd3f5e 100644\n--- a/src/qwen4_exp/gpu/prefill/experts.rs\n+++ b/src/qwen4_exp/gpu/prefill/experts.rs\n@@ -7,41 +7,21 @@ impl Gpu<'_> {\n     /// the routed experts one at a time (their tokens gathered, computed,\n     /// scatter-added). The layer's most-used experts (up to the pool's\n     /// per-layer share) go into the residency set and stay for decode;\n-    /// the rest stream through the ring. Returns (records fetched, seconds\n+    /// the rest stream through the ring. Returns (records fetched, bytes fetched, seconds\n     /// waiting on ring slots, GPU seconds).\n     pub(super) fn pf_experts(\n         &mut self,\n         moe: MoeRef,\n         t: usize,\n         pf: &PrefillScratch,\n-    ) -> Result<(usize, f64, f64)> {\n+    ) -> Result<(usize, usize, f64, f64)> {\n         let c = &self.p.cfg;\n         let k = c.num_experts_per_tok;\n         let h = c.hidden_size as u32;\n         let inter = self.p.manifest.experts.inter as u32;\n         let stride = self.p.manifest.experts.record_stride as usize;\n-        let l = &self.p.manifest.experts;\n-        let gate = Q {\n-            w: l.gate_w as usize,\n-            s: l.gate_s as usize,\n-            b: l.gate_b as usize,\n-            out: inter,\n-            inp: h,\n-        };\n-        let up = Q {\n-            w: l.up_w as usize,\n-            s: l.up_s as usize,\n-            b: l.up_b as usize,\n-            out: inter,\n-            inp: h,\n-        };\n-        let down = Q {\n-            w: l.down_w as usize,\n-            s: l.down_s as usize,\n-            b: l.down_b as usize,\n-            out: h,\n-            inp: inter,\n-        };\n+        let base_layout = crate::qwen4_exp::lowbit::Layout::four_bit(&self.p.manifest.experts);\n+        let miss_layout = self.low_bit_store.unwrap_or(base_layout);\n         let n_record_layers = self.p.manifest.experts.layers;\n         let idx = self.read_u32(&pf.topk_idx, t * k);\n         let wts = self.read_f32(&pf.topk_w, t * k);\n@@ -78,6 +58,7 @@ impl Gpu<'_> {\n             csr_offset: usize,\n             row_count: usize,\n             source: ExpertSource,\n+            layout: crate::qwen4_exp::lowbit::Layout,\n         }\n         let mut jobs: Vec<ExpertJob> = Vec::new();\n         self.step_no += 1;\n@@ -92,13 +73,9 @@ impl Gpu<'_> {\n                 csr_w.push(w);\n             }\n             let rid = self.record_id(moe.record_layer, e as u32);\n-            // A record resident as a low-bit copy is not usable by the 4-bit\n-            // GEMMs: treat it as absent here (the ring streams the 4-bit\n-            // version; the slot keeps its copy for decode).\n-            let source = if !self.all_low_bits\n-                && ((keep.contains(&e) && self.res.kind(rid) == 0)\n-                    || (self.res.is_member(rid) && self.res.kind(rid) == 0))\n-            {\n+            // Preserve a resident record's precision. New kept records\n+            // use the pool's default; transient misses use --miss-experts.\n+            let source = if keep.contains(&e) || self.res.is_member(rid) {\n                 let fetch = !self\n                     .res\n                     .acquire(&self.ctx, &[rid], self.step_no)?\n@@ -115,7 +92,12 @@ impl Gpu<'_> {\n                 ring_pos += 1;\n                 ExpertSource::Ring(slot)\n             };\n+            let layout = match &source {\n+                ExpertSource::Pool { .. } if self.res.kind(rid) == 0 => base_layout,\n+                _ => miss_layout,\n+            };\n             jobs.push(ExpertJob {\n+                layout,\n                 expert: e,\n                 csr_offset,\n                 row_count: list.len(),\n@@ -209,8 +191,30 @@ impl Gpu<'_> {\n                         256,\n                         false,\n                     );\n-                    self.qmm_from(&enc, wb, &gate.at_offset(rec), &pf.xg, &pf.ge, n);\n-                    self.qmm_from(&enc, wb, &up.at_offset(rec), &pf.xg, &pf.ue, n);\n+                    let l = job.layout;\n+                    let gate = Q {\n+                        w: l.gate_w,\n+                        s: l.gate_s,\n+                        b: l.gate_b,\n+                        out: inter,\n+                        inp: h,\n+                    };\n+                    let up = Q {\n+                        w: l.up_w,\n+                        s: l.up_s,\n+                        b: l.up_b,\n+                        out: inter,\n+                        inp: h,\n+                    };\n+                    let down = Q {\n+                        w: l.down_w,\n+                        s: l.down_s,\n+                        b: l.down_b,\n+                        out: h,\n+                        inp: inter,\n+                    };\n+                    self.expert_qmm_from(&enc, wb, &gate.at_offset(rec), &pf.xg, &pf.ge, n, l.bits);\n+                    self.expert_qmm_from(&enc, wb, &up.at_offset(rec), &pf.xg, &pf.ue, n, l.bits);\n                     self.dispatch(\n                         &enc,\n                         &self.pipes.silu_mul,\n@@ -223,7 +227,7 @@ impl Gpu<'_> {\n                         256,\n                         false,\n                     );\n-                    self.qmm_from(&enc, wb, &down.at_offset(rec), &pf.hg, &pf.ye, n);\n+                    self.expert_qmm_from(&enc, wb, &down.at_offset(rec), &pf.hg, &pf.ye, n, l.bits);\n                     self.dispatch(\n                         &enc,\n                         &self.pipes.scatter_add_rows,\n@@ -250,6 +254,7 @@ impl Gpu<'_> {\n \n         // Stream the batches' records ahead of the GPU.\n         let mut fetched = 0usize;\n+        let mut fetched_bytes = 0usize;\n         let mut wait_s = 0.0f64;\n         let ring_base = self.ring.contents().cast::<u8>().as_ptr() as usize;\n         for (bi, batch) in jobs.chunks(GROUP).enumerate() {\n@@ -263,55 +268,53 @@ impl Gpu<'_> {\n                 }\n                 wait_s += t0.elapsed().as_secs_f64();\n             }\n-            let (mut to_set, mut to_ring) = (Vec::new(), Vec::new());\n+            let (mut to_set, mut ring4, mut ring_low) = (Vec::new(), Vec::new(), Vec::new());\n             for job in batch {\n                 match &job.source {\n                     ExpertSource::Pool {\n                         rid, fetch: true, ..\n                     } => to_set.push(*rid),\n-                    ExpertSource::Ring(slot) => to_ring.push((\n-                        ring_base + *slot as usize * stride,\n-                        self.p.record_offset(moe.record_layer, job.expert),\n-                        stride,\n-                    )),\n+                    ExpertSource::Ring(slot) => {\n+                        let reads = if job.layout.bits == 4 {\n+                            &mut ring4\n+                        } else {\n+                            &mut ring_low\n+                        };\n+                        reads.push((\n+                            ring_base + *slot as usize * stride,\n+                            self.record_id(moe.record_layer, job.expert as u32) * job.layout.stride,\n+                            job.layout.stride,\n+                        ));\n+                    }\n                     _ => {}\n                 }\n             }\n-            fetched += to_set.len() + to_ring.len();\n+            fetched += to_set.len() + ring4.len() + ring_low.len();\n+            fetched_bytes += batch\n+                .iter()\n+                .filter(|job| !matches!(job.source, ExpertSource::Pool { fetch: false, .. }))\n+                .map(|job| job.layout.stride)\n+                .sum::<usize>();\n             if !self.fake_experts {\n                 let (plan, _) = self.res.plan_reads(&to_set);\n                 plan.run(&self.pool_file, &self.pool_file_nocache);\n-                residency::fetch_into_slots(&self.pool_file_nocache, &to_ring);\n+                residency::fetch_into_slots(&self.pool_file_nocache, &ring4);\n+                if !ring_low.is_empty() {\n+                    let file = self\n+                        .res\n+                        .store_file(&self.pool_file_nocache, miss_layout.kind());\n+                    residency::fetch_into_slots(file, &ring_low);\n+                }\n             }\n             self.res.finish(&self.ctx, &to_set)?;\n             self.event_cpu.setSignaledValue(cbase + bi as u64 + 1);\n         }\n-        // With every record low-bit the pool holds records the 4-bit\n-        // prefill GEMMs cannot use, so the chunk streamed everything\n-        // through the ring above; warm the pool for decode with this\n-        // layer's most-used experts, read in the background while the\n-        // next layer computes (prefill has spare drive bandwidth).\n-        if self.all_low_bits && !self.fake_experts && !self.skips(\"experts\") {\n-            self.join_pending()?;\n-            let rids: Vec<usize> = by_use\n-                .iter()\n-                .take(budget)\n-                .map(|&e| self.record_id(moe.record_layer, e as u32))\n-                .collect();\n-            let need = self.res.acquire(&self.ctx, &rids, self.step_no)?;\n-            if !need.is_empty() {\n-                let (plan, _) = self.res.plan_reads(&need);\n-                let (cached, nocache) = (\n-                    self.pool_file.try_clone().expect(\"dup experts fd\"),\n-                    self.pool_file_nocache.try_clone().expect(\"dup experts fd\"),\n-                );\n-                self.pending = Some(PendingRead {\n-                    thread: Some(std::thread::spawn(move || plan.run(&cached, &nocache))),\n-                    records: need,\n-                });\n-            }\n-        }\n         cb.waitUntilCompleted();\n-        Ok((fetched, wait_s, cb.GPUEndTime() - cb.GPUStartTime()))\n+        Ok((\n+            fetched,\n+            fetched_bytes,\n+            wait_s,\n+            cb.GPUEndTime() - cb.GPUStartTime(),\n+        ))\n     }\n }\ndiff --git a/src/qwen4_exp/gpu/prefill/projection.rs b/src/qwen4_exp/gpu/prefill/projection.rs\nindex a0a491d..9742bb7 100644\n--- a/src/qwen4_exp/gpu/prefill/projection.rs\n+++ b/src/qwen4_exp/gpu/prefill/projection.rs\n@@ -32,12 +32,50 @@ impl Gpu<'_> {\n             );\n             return;\n         }\n+        self.qmm_tiled(\n+            enc,\n+            wb,\n+            q,\n+            x,\n+            y,\n+            nb,\n+            [&self.pipes.qmm_n8, &self.pipes.qmm_n16, &self.pipes.qmm_w],\n+        );\n+    }\n+\n+    /// Low-bit expert records share the tiled dispatch and output layout,\n+    /// but use their own unpacking kernels. Dense projections stay Q4.\n+    #[allow(clippy::too_many_arguments)]\n+    pub(super) fn expert_qmm_from(\n+        &self,\n+        enc: &Enc,\n+        wb: &Buf,\n+        q: &Q,\n+        x: &Buf,\n+        y: &Buf,\n+        nb: usize,\n+        bits: u32,\n+    ) {\n+        if bits == 4 {\n+            self.qmm_from(enc, wb, q, x, y, nb);\n+        } else {\n+            let pipes = &self.pipes.expert_qmm[(bits - 2) as usize];\n+            self.qmm_tiled(enc, wb, q, x, y, nb, [&pipes[0], &pipes[1], &pipes[2]]);\n+        }\n+    }\n+\n+    #[allow(clippy::too_many_arguments)]\n+    fn qmm_tiled(&self, enc: &Enc, wb: &Buf, q: &Q, x: &Buf, y: &Buf, nb: usize, pipes: [&Pso; 3]) {\n+        let p = QmvParams {\n+            out_dim: q.out,\n+            in_dim: q.inp,\n+        };\n         let (pipe, tile) = if nb <= 8 {\n-            (&self.pipes.qmm_n8, 8)\n+            (pipes[0], 8)\n         } else if nb <= 16 {\n-            (&self.pipes.qmm_n16, 16)\n+            (pipes[1], 16)\n         } else {\n-            (&self.pipes.qmm_w, 32)\n+            (pipes[2], 32)\n         };\n         let ntt = nb.div_ceil(tile).max(1);\n         let nttu = ntt as u32;\ndiff --git a/src/qwen4_exp/gpu/residency.rs b/src/qwen4_exp/gpu/residency.rs\nindex 5b0b59e..505ff4c 100644\n--- a/src/qwen4_exp/gpu/residency.rs\n+++ b/src/qwen4_exp/gpu/residency.rs\n@@ -258,6 +258,18 @@ impl Pool {\n         }\n     }\n \n+    /// Store backing a prefill ring read. Its precision is also used to\n+    /// select the GEMM, so compressed bytes never reach a Q4 kernel.\n+    pub fn store_file<'a>(&'a self, original: &'a File, kind: u8) -> &'a File {\n+        if kind == 0 {\n+            original\n+        } else if let Pool::Copy(c) = self {\n+            c.low_file.as_ref().expect(\"low-bit store attached\")\n+        } else {\n+            unreachable!(\"low-bit records require the copy pool\")\n+        }\n+    }\n+\n     pub fn budget(&self) -> usize {\n         match self {\n             Pool::Set(r) => r.budget,\ndiff --git a/src/qwen4_exp/lowbit.rs b/src/qwen4_exp/lowbit.rs\nindex a7f6cd2..e60a931 100644\n--- a/src/qwen4_exp/lowbit.rs\n+++ b/src/qwen4_exp/lowbit.rs\n@@ -48,6 +48,35 @@ pub struct Layout {\n const PAGE: usize = 16384;\n \n impl Layout {\n+    /// Preserve the base store's offsets verbatim; prefill and decode use\n+    /// this same description rather than reconstructing the record layout.\n+    pub fn four_bit(e: &ExpertLayout) -> Self {\n+        Self {\n+            bits: 4,\n+            stride: e.record_stride as usize,\n+            mat: e.inter * e.hidden / 2,\n+            scale_bytes: (e.gate_b - e.gate_s) as usize,\n+            gate_w: e.gate_w as usize,\n+            up_w: e.up_w as usize,\n+            down_w: e.down_w as usize,\n+            gate_s: e.gate_s as usize,\n+            gate_b: e.gate_b as usize,\n+            up_s: e.up_s as usize,\n+            up_b: e.up_b as usize,\n+            down_s: e.down_s as usize,\n+            down_b: e.down_b as usize,\n+        }\n+    }\n+\n+    /// Address-table tag shared with the decode shaders.\n+    pub fn kind(&self) -> u8 {\n+        match self.bits {\n+            3 => 1,\n+            2 => 2,\n+            _ => 0,\n+        }\n+    }\n+\n     pub fn new(e: &ExpertLayout, bits: u32) -> Result<Self> {\n         anyhow::ensure!(\n             bits == 2 || bits == 3,\ndiff --git a/src/kernels.rs b/src/kernels.rs\nindex 023c12d..9585b39 100644\n--- a/src/kernels.rs\n+++ b/src/kernels.rs\n@@ -33,6 +33,7 @@ pub(crate) const BATCH_MSL: &str = metal_library!(\n     \"qwen4_exp/quantized_rows.metal\",\n     \"qwen4_exp/hyperconnection.metal\",\n     \"qwen4_exp/experts.metal\",\n+    \"qwen4_exp/expert_gemm.metal\",\n     \"qwen4_exp/ple.metal\",\n     \"qwen4_exp/mtp.metal\",\n     \"qwen4_exp/deltanet.metal\",\ndiff --git a/src/runner.rs b/src/runner.rs\nindex 8f8b902..995e318 100644\n--- a/src/runner.rs\n+++ b/src/runner.rs\n@@ -315,12 +315,12 @@ pub(crate) fn qwen4_exp_gen_once(\n         let recs: usize = st.iter().map(|s| s.fetched).sum();\n         let sum =\n             |f: fn(&qwen4_exp::gpu::prefill::ChunkStats) -> f64| st.iter().map(f).sum::<f64>();\n-        let stride = packed.manifest.experts.record_stride as f64;\n+        let bytes: usize = st.iter().map(|s| s.fetched_bytes).sum();\n         eprintln!(\n-            \"prefill engine: {} chunk(s) of up to {pf_chunk}, {recs} expert records streamed ({:.1} GB, {:.0} MB/token), {:.1}s waiting on fetches | GPU s: DeltaNet blocks {:.1}, attention blocks {:.1}, expert streams {:.1}, MTP {:.1} | n-gram gather {:.1}s CPU\",\n+            \"prefill engine: {} chunk(s) of up to {pf_chunk}, {recs} expert records streamed ({:.1} GB, {:.0} MB/token), {:.1}s waiting for ring reuse | GPU s: DeltaNet blocks {:.1}, attention blocks {:.1}, expert streams {:.1}, MTP {:.1} | n-gram gather {:.1}s CPU\",\n             st.len(),\n-            recs as f64 * stride / 1e9,\n-            recs as f64 * stride / 1e6 / ids.len() as f64,\n+            bytes as f64 / 1e9,\n+            bytes as f64 / 1e6 / ids.len() as f64,\n             sum(|s| s.wait_s),\n             sum(|s| s.gpu_delta_s),\n             sum(|s| s.gpu_attn_s),\ndiff --git a/tests/unit/qwen4_exp/prefill.rs b/tests/unit/qwen4_exp/prefill.rs\nindex 705ebf5..6add4c7 100644\n--- a/tests/unit/qwen4_exp/prefill.rs\n+++ b/tests/unit/qwen4_exp/prefill.rs\n@@ -96,3 +96,207 @@ fn qmm_matches_matvec() {\n         );\n     }\n }\n+\n+#[test]\n+fn low_bit_expert_gemms_match_reconstructed_weights() {\n+    use std::os::unix::fs::FileExt;\n+    let Some(dir) = model_dir() else { return };\n+    let packed = Packed::open(&dir).unwrap();\n+    let gpu = Gpu::load(\n+        &packed,\n+        64,\n+        &Options {\n+            pool_gb: Some(PoolBudget::Gb(0.25)),\n+            ..Options::default()\n+        },\n+    )\n+    .unwrap();\n+    // Use actual cached records, but derive the oracle from their original\n+    // Q4 codes, independently of the compressed layout and GPU unpacking.\n+    let (layer, expert) = (3, 17);\n+    let original = packed.expert(layer, expert);\n+    for bits in [2, 3] {\n+        let path = packed.dir.join(format!(\"experts{bits}.bin\"));\n+        let Ok(file) = std::fs::File::open(&path) else {\n+            eprintln!(\"skipping Q{bits} GEMMs: {} is absent\", path.display());\n+            continue;\n+        };\n+        let l = crate::qwen4_exp::lowbit::Layout::new(&packed.manifest.experts, bits).unwrap();\n+        let mut record = vec![0u8; l.stride];\n+        let rid = layer * packed.manifest.experts.experts + expert;\n+        file.read_exact_at(&mut record, (rid * l.stride) as u64)\n+            .unwrap();\n+        let wb = gpu.ctx.new_buffer(l.stride).unwrap();\n+        unsafe {\n+            std::ptr::copy_nonoverlapping(\n+                record.as_ptr(),\n+                wb.contents().cast::<u8>().as_ptr(),\n+                record.len(),\n+            );\n+        }\n+        for (name, ql, w, s, b) in [\n+            (\"gate\", &original.gate, l.gate_w, l.gate_s, l.gate_b),\n+            (\"up\", &original.up, l.up_w, l.up_s, l.up_b),\n+            (\"down\", &original.down, l.down_w, l.down_s, l.down_b),\n+        ] {\n+            let q = Q {\n+                w,\n+                s,\n+                b,\n+                out: ql.out_dim as u32,\n+                inp: ql.in_dim as u32,\n+            };\n+            let padded = 96;\n+            let x: Vec<f32> = (0..padded * ql.in_dim)\n+                .map(|i| (((i * 37 + i / ql.in_dim * 19) % 257) as f32 - 128.0) / 129.0)\n+                .collect();\n+            let xb = gpu.ctx.new_buffer(x.len() * 4).unwrap();\n+            let yb = gpu.ctx.new_buffer(padded * ql.out_dim * 4).unwrap();\n+            unsafe {\n+                std::ptr::copy_nonoverlapping(\n+                    x.as_ptr(),\n+                    xb.contents().cast::<f32>().as_ptr(),\n+                    x.len(),\n+                );\n+            }\n+            // Cover output fragment boundaries and both ends of each matrix.\n+            let channels = [0, 1, 7, 8, 31, 32, 63, 64, 127, 128, ql.out_dim - 1];\n+            let references: Vec<Vec<f32>> = channels\n+                .iter()\n+                .map(|&out| {\n+                    let weights: Vec<f32> = (0..ql.in_dim)\n+                        .map(|k| {\n+                            let code =\n+                                (ql.weight[out * ql.in_dim / 8 + k / 8] >> (4 * (k % 8))) & 15;\n+                            let step = 1u32 << (4 - bits);\n+                            let midpoint = (code / step * step) as f32 + (step - 1) as f32 * 0.5;\n+                            let group = out * ql.in_dim / 64 + k / 64;\n+                            ql.scales[group]\n+                                .to_f32()\n+                                .mul_add(midpoint, ql.biases[group].to_f32())\n+                        })\n+                        .collect();\n+                    x.chunks_exact(ql.in_dim)\n+                        .take(65)\n+                        .map(|row| {\n+                            row.iter()\n+                                .zip(&weights)\n+                                .map(|(&x, &w)| x as f64 * w as f64)\n+                                .sum::<f64>() as f32\n+                        })\n+                        .collect()\n+                })\n+                .collect();\n+            for nb in [1usize, 7, 8, 9, 15, 16, 17, 31, 32, 33, 65] {\n+                let output = unsafe {\n+                    std::slice::from_raw_parts_mut(\n+                        yb.contents().cast::<f32>().as_ptr(),\n+                        padded * ql.out_dim,\n+                    )\n+                };\n+                output.fill(f32::NAN);\n+                let cb = gpu.ctx.queue.commandBuffer().unwrap();\n+                let enc = cb.computeCommandEncoder().unwrap();\n+                gpu.expert_qmm_from(&enc, &wb, &q, &xb, &yb, nb, bits);\n+                enc.endEncoding();\n+                cb.commit();\n+                cb.waitUntilCompleted();\n+                let mut worst = 0.0f32;\n+                let scale = references\n+                    .iter()\n+                    .flatten()\n+                    .fold(0.0f32, |a, &b| a.max(b.abs()));\n+                for (&channel, reference) in channels.iter().zip(&references) {\n+                    for row in 0..nb {\n+                        let got = output[row * ql.out_dim + channel];\n+                        assert!(got.is_finite(), \"Q{bits} {name} nb={nb} unwritten output\");\n+                        worst = worst.max((got - reference[row]).abs());\n+                    }\n+                }\n+                let tile = if nb <= 8 {\n+                    8\n+                } else if nb <= 16 {\n+                    16\n+                } else {\n+                    32\n+                };\n+                assert!(\n+                    output[nb.div_ceil(tile) * tile * ql.out_dim..]\n+                        .iter()\n+                        .all(|v| v.is_nan()),\n+                    \"write beyond token tile\"\n+                );\n+                assert!(\n+                    worst <= 0.002 * scale.max(1.0),\n+                    \"Q{bits} {name} nb={nb}: error {worst}, scale {scale}\"\n+                );\n+                eprintln!(\"Q{bits} {name} nb={nb}: max error {worst:.6}, scale {scale:.3}\");\n+            }\n+        }\n+    }\n+}\n+\n+#[test]\n+fn prefill_preserves_expert_precision_through_decode() {\n+    let Some(dir) = model_dir() else { return };\n+    let packed = Packed::open(&dir).unwrap();\n+    for (bits, miss_bits) in [(4, 4), (3, 3), (2, 2), (4, 2)] {\n+        if miss_bits < 4 && !packed.dir.join(format!(\"experts{miss_bits}.bin\")).exists() {\n+            continue;\n+        }\n+        let options = Options {\n+            experts: bits,\n+            miss_experts: Some(miss_bits),\n+            // Fit a complete decode step while still forcing ring-slot reuse.\n+            pool_gb: Some(PoolBudget::Gb(4.0)),\n+            ..Options::default()\n+        };\n+        let mut gpu = Gpu::load(&packed, 128, &options).unwrap();\n+        let tokens: Vec<u32> = (128..192).collect();\n+        gpu.prefill_chunk(&tokens[..32], Some(tokens[32]), false)\n+            .unwrap();\n+        let (next, draft) = gpu.prefill_chunk(&tokens[32..], None, false).unwrap();\n+        assert_eq!(gpu.pos, 64);\n+        assert_eq!(gpu.mtp_len, 64);\n+        assert_eq!(gpu.tokens, tokens);\n+        let stride4 = packed.manifest.experts.record_stride as usize;\n+        for st in &gpu.prefill_stats {\n+            assert!(st.fetched > RING);\n+            if bits == 4 && miss_bits == 4 {\n+                assert_eq!(st.fetched_bytes, st.fetched * stride4);\n+            } else if bits < 4 {\n+                let layout = gpu.low_bit_store.unwrap();\n+                assert_eq!(st.fetched_bytes, st.fetched * layout.stride);\n+            } else {\n+                let stride_low = gpu.low_bit_store.unwrap().stride;\n+                assert!(st.fetched_bytes < st.fetched * stride4);\n+                assert!(st.fetched_bytes > st.fetched * stride_low);\n+            }\n+        }\n+        let resident: Vec<usize> = (0..packed.manifest.experts.layers\n+            * packed.manifest.experts.experts)\n+            .filter(|&rid| gpu.res.is_member(rid))\n+            .collect();\n+        assert!(!resident.is_empty());\n+        let expected_kind = if bits < 4 {\n+            gpu.low_bit_store.unwrap().kind()\n+        } else {\n+            0\n+        };\n+        assert!(\n+            resident\n+                .iter()\n+                .all(|&rid| gpu.res.kind(rid) == expected_kind)\n+        );\n+        gpu.prefill_release();\n+        let verified = gpu.step_rows(&[next, draft], true, true).unwrap();\n+        assert!(\n+            verified\n+                .iter()\n+                .all(|&token| (token as usize) < packed.cfg.vocab_size)\n+        );\n+        assert!(gpu.logits_row(0).iter().all(|x| x.is_finite()));\n+        gpu.commit(1).unwrap();\n+        assert_eq!(gpu.pos, 65);\n+    }\n+}\n",
+  "prompts": {
+    "4": "The quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\n\nSummarize this document in three sentences.",
+    "20": "The quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\n\nSummarize this document in three sentences.",
+    "128": "The quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\n\nSummarize this document in three sentences."
+  },
+  "notes": [
+    "Fresh processes, max_ctx=8192, adaptive pool, two adaptive drafts, no prefix cache.",
+    "Exactly eight decode tokens; this suite measures prefill, not complete answers or decode throughput.",
+    "Loading/conversion excluded; any store build invalidates the sample.",
+    "Power sampled at process boundaries; brief intervening changes may be missed.",
+    "Configurations and binary order rotate. Existing OS file caches are not purged.",
+    "Low-bit prefill changes output relative to the earlier Q4-prefill implementation.",
+    "Each table cell has two samples. Long-prompt timings varied across the run; Q2 paired gains were +1.0% and +15.9%, so its long-prompt gain is less certain than the short/medium gains.",
+    "Q4 compute is unchanged; its timing differences are control variation, not an intended optimization.",
+    "All 36 samples were on AC at both checks, built no stores, and reported 20.98 GB Metal after prefill scratch release. This is not a transient peak measurement.",
+    "The after binary is preserved at binaries.after.archived_path; the exact benchmark source is source_commit plus source_diff."
+  ],
+  "runs": [
+    {
+      "id": "r1-repeat4-q4-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 4,
+      "prompt": "4",
+      "wall_seconds": 14.393836875,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.69s, clock probe 12.83 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 1.0, attention blocks 0.3, expert streams 8.5, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 11.33s (10.7 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 116.3 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.7 ms/step | n-gram gather 0.5 ms/step\ndecode 8 tokens in 1.65s (4.85 tok/s) | 6 steps, mean step 270.4 ms (min 148.1, max 496.2) | gpu-active 268.7 ms | io wait 60.5 ms (set 0.7, read 114.8) | sync fetches/step 63.5 + lookahead 171.7 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 17.66 ms\n",
+      "output": "r1-repeat4-q4-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.69,
+        "clock_start_ms": 12.83,
+        "prompt_tokens": 121,
+        "prefill_seconds": 11.33,
+        "pp_s": 10.7,
+        "output_tokens": 8,
+        "decode_seconds": 1.65,
+        "tg_s": 4.85,
+        "steps": 6,
+        "mean_step_ms": 270.4,
+        "gpu_active_ms": 268.7,
+        "io_wait_ms": 60.5,
+        "metal_gb": 20.98,
+        "clock_end_ms": 17.66,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r1-repeat4-q4-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 4,
+      "prompt": "4",
+      "wall_seconds": 13.181329750000002,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.66s, clock probe 12.57 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 0.9, attention blocks 0.3, expert streams 8.6, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 10.19s (11.9 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 115.5 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.7 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.66s (4.83 tok/s) | 6 steps, mean step 271.6 ms (min 151.5, max 473.7) | gpu-active 270.3 ms | io wait 60.6 ms (set 0.7, read 114.0) | sync fetches/step 63.5 + lookahead 171.7 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 18.01 ms\n",
+      "output": "r1-repeat4-q4-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.66,
+        "clock_start_ms": 12.57,
+        "prompt_tokens": 121,
+        "prefill_seconds": 10.19,
+        "pp_s": 11.9,
+        "output_tokens": 8,
+        "decode_seconds": 1.66,
+        "tg_s": 4.83,
+        "steps": 6,
+        "mean_step_ms": 271.6,
+        "gpu_active_ms": 270.3,
+        "io_wait_ms": 60.6,
+        "metal_gb": 20.98,
+        "clock_end_ms": 18.01,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r1-repeat4-q3-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 3,
+      "prompt": "4",
+      "wall_seconds": 15.662400957999996,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.46s, clock probe 12.32 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 1.0, attention blocks 0.3, expert streams 11.7, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 121 tokens in 13.61s (8.9 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 75.9 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.5 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.22s (6.55 tok/s) | 6 steps, mean step 199.6 ms (min 126.5, max 318.2) | gpu-active 198.3 ms | io wait 41.9 ms (set 0.7, read 74.2) | sync fetches/step 50.7 + lookahead 135.5 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 12.58 ms\n",
+      "output": "r1-repeat4-q3-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.46,
+        "clock_start_ms": 12.32,
+        "prompt_tokens": 121,
+        "prefill_seconds": 13.61,
+        "pp_s": 8.9,
+        "output_tokens": 8,
+        "decode_seconds": 1.22,
+        "tg_s": 6.55,
+        "steps": 6,
+        "mean_step_ms": 199.6,
+        "gpu_active_ms": 198.3,
+        "io_wait_ms": 41.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.58,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r1-repeat4-q3-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 3,
+      "prompt": "4",
+      "wall_seconds": 10.213616541999997,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.47s, clock probe 12.31 ms\nprefill engine: 1 chunk(s) of up to 4096, 9618 expert records streamed (20.8 GB, 172 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 0.7, attention blocks 0.2, expert streams 6.9, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 8.18s (14.8 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 83.7 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 3.6 ms/step | n-gram gather 0.4 ms/step\ndecode 8 tokens in 1.17s (6.85 tok/s) | 5 steps, mean step 228.1 ms (min 162.6, max 315.9) | gpu-active 226.7 ms | io wait 48.3 ms (set 0.8, read 82.1) | sync fetches/step 61.4 + lookahead 165.4 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 14.40 ms\n",
+      "output": "r1-repeat4-q3-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.47,
+        "clock_start_ms": 12.31,
+        "prompt_tokens": 121,
+        "prefill_seconds": 8.18,
+        "pp_s": 14.8,
+        "output_tokens": 8,
+        "decode_seconds": 1.17,
+        "tg_s": 6.85,
+        "steps": 5,
+        "mean_step_ms": 228.1,
+        "gpu_active_ms": 226.7,
+        "io_wait_ms": 48.3,
+        "metal_gb": 20.98,
+        "clock_end_ms": 14.4,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r1-repeat4-q2-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 2,
+      "prompt": "4",
+      "wall_seconds": 14.333624874999998,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.46s, clock probe 12.49 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 0.9, attention blocks 0.3, expert streams 11.0, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 121 tokens in 12.77s (9.5 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 35.1 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 2.8 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 0.75s (10.72 tok/s) | 5 steps, mean step 144.6 ms (min 99.2, max 215.3) | gpu-active 143.2 ms | io wait 24.4 ms (set 0.7, read 33.6) | sync fetches/step 36.4 + lookahead 117.2 (warm 0.0, cut 0.0) | pool 10222/11162 | 20.98 GB Metal\nclock probe at end 12.60 ms\n",
+      "output": "r1-repeat4-q2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.46,
+        "clock_start_ms": 12.49,
+        "prompt_tokens": 121,
+        "prefill_seconds": 12.77,
+        "pp_s": 9.5,
+        "output_tokens": 8,
+        "decode_seconds": 0.75,
+        "tg_s": 10.72,
+        "steps": 5,
+        "mean_step_ms": 144.6,
+        "gpu_active_ms": 143.2,
+        "io_wait_ms": 24.4,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.6,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r1-repeat4-q2-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 2,
+      "prompt": "4",
+      "wall_seconds": 7.52086912499999,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.45s, clock probe 12.82 ms\nprefill engine: 1 chunk(s) of up to 4096, 9411 expert records streamed (14.5 GB, 120 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 0.7, attention blocks 0.2, expert streams 4.8, MTP 0.1 | n-gram gather 0.0s CPU\nprefill 121 tokens in 5.95s (20.3 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 32.4 ms/step | drafts 2, accepted 1.00/step (1.60 tokens/step) | mtp 3.6 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 0.74s (10.74 tok/s) | 5 steps, mean step 144.2 ms (min 104.3, max 217.8) | gpu-active 142.9 ms | io wait 23.9 ms (set 0.7, read 31.0) | sync fetches/step 35.4 + lookahead 113.8 (warm 0.0, cut 0.0) | pool 10126/11162 | 20.98 GB Metal\nclock probe at end 12.56 ms\n",
+      "output": "r1-repeat4-q2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 12.82,
+        "prompt_tokens": 121,
+        "prefill_seconds": 5.95,
+        "pp_s": 20.3,
+        "output_tokens": 8,
+        "decode_seconds": 0.74,
+        "tg_s": 10.74,
+        "steps": 5,
+        "mean_step_ms": 144.2,
+        "gpu_active_ms": 142.9,
+        "io_wait_ms": 23.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.56,
+        "drafts": 2,
+        "accepted_drafts_per_step": 1.0
+      }
+    },
+    {
+      "id": "r1-repeat20-q4-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 4,
+      "prompt": "20",
+      "wall_seconds": 18.062315833,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.44s, clock probe 12.87 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 1.9, attention blocks 0.5, expert streams 12.3, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 15.21s (34.2 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 203.2 ms/step | drafts 2, accepted 1.00/step (1.60 tokens/step) | mtp 6.6 ms/step | n-gram gather 0.3 ms/step\ndecode 8 tokens in 2.02s (3.96 tok/s) | 5 steps, mean step 396.2 ms (min 253.6, max 627.9) | gpu-active 394.8 ms | io wait 80.8 ms (set 1.1, read 201.2) | sync fetches/step 85.6 + lookahead 288.8 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 23.13 ms\n",
+      "output": "r1-repeat20-q4-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.44,
+        "clock_start_ms": 12.87,
+        "prompt_tokens": 521,
+        "prefill_seconds": 15.21,
+        "pp_s": 34.2,
+        "output_tokens": 8,
+        "decode_seconds": 2.02,
+        "tg_s": 3.96,
+        "steps": 5,
+        "mean_step_ms": 396.2,
+        "gpu_active_ms": 394.8,
+        "io_wait_ms": 80.8,
+        "metal_gb": 20.98,
+        "clock_end_ms": 23.13,
+        "drafts": 2,
+        "accepted_drafts_per_step": 1.0
+      }
+    },
+    {
+      "id": "r1-repeat20-q4-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 4,
+      "prompt": "20",
+      "wall_seconds": 18.030720000000002,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.44s, clock probe 12.51 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 1.9, attention blocks 0.5, expert streams 12.3, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 15.20s (34.3 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 201.7 ms/step | drafts 2, accepted 1.00/step (1.60 tokens/step) | mtp 6.6 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.99s (4.02 tok/s) | 5 steps, mean step 390.3 ms (min 235.1, max 623.7) | gpu-active 389.1 ms | io wait 80.9 ms (set 1.1, read 199.7) | sync fetches/step 85.6 + lookahead 288.8 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 22.62 ms\n",
+      "output": "r1-repeat20-q4-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.44,
+        "clock_start_ms": 12.51,
+        "prompt_tokens": 521,
+        "prefill_seconds": 15.2,
+        "pp_s": 34.3,
+        "output_tokens": 8,
+        "decode_seconds": 1.99,
+        "tg_s": 4.02,
+        "steps": 5,
+        "mean_step_ms": 390.3,
+        "gpu_active_ms": 389.1,
+        "io_wait_ms": 80.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 22.62,
+        "drafts": 2,
+        "accepted_drafts_per_step": 1.0
+      }
+    },
+    {
+      "id": "r1-repeat20-q3-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 3,
+      "prompt": "20",
+      "wall_seconds": 19.588405957999996,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.46s, clock probe 12.80 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 2.1, attention blocks 0.6, expert streams 14.1, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 17.33s (30.1 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 122.7 ms/step | drafts 2, accepted 1.00/step (1.60 tokens/step) | mtp 4.8 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.42s (5.62 tok/s) | 5 steps, mean step 278.9 ms (min 187.8, max 427.7) | gpu-active 277.7 ms | io wait 57.9 ms (set 1.1, read 120.7) | sync fetches/step 69.2 + lookahead 242.2 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 15.55 ms\n",
+      "output": "r1-repeat20-q3-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.46,
+        "clock_start_ms": 12.8,
+        "prompt_tokens": 521,
+        "prefill_seconds": 17.33,
+        "pp_s": 30.1,
+        "output_tokens": 8,
+        "decode_seconds": 1.42,
+        "tg_s": 5.62,
+        "steps": 5,
+        "mean_step_ms": 278.9,
+        "gpu_active_ms": 277.7,
+        "io_wait_ms": 57.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 15.55,
+        "drafts": 2,
+        "accepted_drafts_per_step": 1.0
+      }
+    },
+    {
+      "id": "r1-repeat20-q3-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 3,
+      "prompt": "20",
+      "wall_seconds": 14.723158875000024,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.45s, clock probe 13.86 ms\nprefill engine: 1 chunk(s) of up to 4096, 13862 expert records streamed (30.0 GB, 58 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 1.6, attention blocks 0.5, expert streams 9.9, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 521 tokens in 12.39s (42.1 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 111.2 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.6 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.50s (5.35 tok/s) | 6 steps, mean step 244.9 ms (min 144.0, max 420.2) | gpu-active 243.6 ms | io wait 47.7 ms (set 1.0, read 109.4) | sync fetches/step 59.7 + lookahead 205.5 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 14.65 ms\n",
+      "output": "r1-repeat20-q3-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 13.86,
+        "prompt_tokens": 521,
+        "prefill_seconds": 12.39,
+        "pp_s": 42.1,
+        "output_tokens": 8,
+        "decode_seconds": 1.5,
+        "tg_s": 5.35,
+        "steps": 6,
+        "mean_step_ms": 244.9,
+        "gpu_active_ms": 243.6,
+        "io_wait_ms": 47.7,
+        "metal_gb": 20.98,
+        "clock_end_ms": 14.65,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r1-repeat20-q2-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 2,
+      "prompt": "20",
+      "wall_seconds": 19.014257499999985,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.46s, clock probe 13.07 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 2.1, attention blocks 0.6, expert streams 14.0, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 17.28s (30.2 tok/s) [engine]\n  dispatches/step 2193 | cpu turnaround 51.9 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 2.3 ms/step | n-gram gather 0.5 ms/step\ndecode 8 tokens in 0.86s (9.33 tok/s) | 5 steps, mean step 167.2 ms (min 116.9, max 251.7) | gpu-active 165.5 ms | io wait 31.8 ms (set 1.1, read 50.1) | sync fetches/step 51.4 + lookahead 155.8 (warm 0.0, cut 0.0) | pool 11162/11162 | 20.98 GB Metal\nclock probe at end 12.28 ms\n",
+      "output": "r1-repeat20-q2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.46,
+        "clock_start_ms": 13.07,
+        "prompt_tokens": 521,
+        "prefill_seconds": 17.28,
+        "pp_s": 30.2,
+        "output_tokens": 8,
+        "decode_seconds": 0.86,
+        "tg_s": 9.33,
+        "steps": 5,
+        "mean_step_ms": 167.2,
+        "gpu_active_ms": 165.5,
+        "io_wait_ms": 31.8,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.28,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r1-repeat20-q2-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 2,
+      "prompt": "20",
+      "wall_seconds": 11.111279124999982,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.44s, clock probe 12.94 ms\nprefill engine: 1 chunk(s) of up to 4096, 13565 expert records streamed (20.9 GB, 40 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 1.6, attention blocks 0.4, expert streams 7.1, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 521 tokens in 9.48s (55.0 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 43.7 ms/step | drafts 2, accepted 0.50/step (1.33 tokens/step) | mtp 2.2 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 0.83s (9.65 tok/s) | 6 steps, mean step 134.2 ms (min 106.6, max 208.4) | gpu-active 132.9 ms | io wait 25.5 ms (set 0.8, read 42.3) | sync fetches/step 40.5 + lookahead 115.3 (warm 0.0, cut 0.0) | pool 11162/11162 | 20.98 GB Metal\nclock probe at end 12.54 ms\n",
+      "output": "r1-repeat20-q2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.44,
+        "clock_start_ms": 12.94,
+        "prompt_tokens": 521,
+        "prefill_seconds": 9.48,
+        "pp_s": 55.0,
+        "output_tokens": 8,
+        "decode_seconds": 0.83,
+        "tg_s": 9.65,
+        "steps": 6,
+        "mean_step_ms": 134.2,
+        "gpu_active_ms": 132.9,
+        "io_wait_ms": 25.5,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.54,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.5
+      }
+    },
+    {
+      "id": "r1-repeat128-q4-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 4,
+      "prompt": "128",
+      "wall_seconds": 32.797211292000014,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.43s, clock probe 12.84 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 9.7, attention blocks 3.4, expert streams 15.6, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 29.74s (108.3 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 252.6 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 7.3 ms/step | n-gram gather 0.3 ms/step\ndecode 8 tokens in 2.24s (3.58 tok/s) | 5 steps, mean step 438.4 ms (min 255.8, max 754.3) | gpu-active 436.7 ms | io wait 93.9 ms (set 1.2, read 250.4) | sync fetches/step 97.0 + lookahead 327.4 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 18.84 ms\n",
+      "output": "r1-repeat128-q4-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.43,
+        "clock_start_ms": 12.84,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 29.74,
+        "pp_s": 108.3,
+        "output_tokens": 8,
+        "decode_seconds": 2.24,
+        "tg_s": 3.58,
+        "steps": 5,
+        "mean_step_ms": 438.4,
+        "gpu_active_ms": 436.7,
+        "io_wait_ms": 93.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 18.84,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    },
+    {
+      "id": "r1-repeat128-q4-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 4,
+      "prompt": "128",
+      "wall_seconds": 33.272672,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.42s, clock probe 12.73 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 9.8, attention blocks 3.4, expert streams 15.9, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 30.12s (107.0 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 268.9 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 8.6 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 2.30s (3.48 tok/s) | 5 steps, mean step 449.6 ms (min 262.3, max 754.6) | gpu-active 448.0 ms | io wait 97.2 ms (set 1.2, read 266.7) | sync fetches/step 97.0 + lookahead 327.4 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 26.59 ms\n",
+      "output": "r1-repeat128-q4-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.42,
+        "clock_start_ms": 12.73,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 30.12,
+        "pp_s": 107.0,
+        "output_tokens": 8,
+        "decode_seconds": 2.3,
+        "tg_s": 3.48,
+        "steps": 5,
+        "mean_step_ms": 449.6,
+        "gpu_active_ms": 448.0,
+        "io_wait_ms": 97.2,
+        "metal_gb": 20.98,
+        "clock_end_ms": 26.59,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    },
+    {
+      "id": "r1-repeat128-q3-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 3,
+      "prompt": "128",
+      "wall_seconds": 32.322507290999994,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.45s, clock probe 12.54 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 9.8, attention blocks 3.4, expert streams 15.6, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 29.89s (107.8 tok/s) [engine]\n  dispatches/step 2250 | cpu turnaround 161.0 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 3.3 ms/step | n-gram gather 0.4 ms/step\ndecode 8 tokens in 1.59s (5.04 tok/s) | 5 steps, mean step 312.0 ms (min 203.4, max 510.7) | gpu-active 310.2 ms | io wait 64.9 ms (set 1.2, read 158.9) | sync fetches/step 82.8 + lookahead 280.8 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 17.77 ms\n",
+      "output": "r1-repeat128-q3-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 12.54,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 29.89,
+        "pp_s": 107.8,
+        "output_tokens": 8,
+        "decode_seconds": 1.59,
+        "tg_s": 5.04,
+        "steps": 5,
+        "mean_step_ms": 312.0,
+        "gpu_active_ms": 310.2,
+        "io_wait_ms": 64.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 17.77,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    },
+    {
+      "id": "r1-repeat128-q3-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 3,
+      "prompt": "128",
+      "wall_seconds": 30.226812250000023,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.46s, clock probe 12.76 ms\nprefill engine: 1 chunk(s) of up to 4096, 17339 expert records streamed (37.5 GB, 12 MB/token), 0.7s waiting for ring reuse | GPU s: DeltaNet blocks 9.9, attention blocks 3.5, expert streams 13.3, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 27.59s (116.7 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 150.1 ms/step | drafts 2, accepted 0.50/step (1.33 tokens/step) | mtp 3.6 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.78s (4.50 tok/s) | 6 steps, mean step 290.5 ms (min 171.1, max 495.3) | gpu-active 289.0 ms | io wait 61.2 ms (set 1.2, read 148.0) | sync fetches/step 78.2 + lookahead 258.7 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 15.06 ms\n",
+      "output": "r1-repeat128-q3-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.46,
+        "clock_start_ms": 12.76,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 27.59,
+        "pp_s": 116.7,
+        "output_tokens": 8,
+        "decode_seconds": 1.78,
+        "tg_s": 4.5,
+        "steps": 6,
+        "mean_step_ms": 290.5,
+        "gpu_active_ms": 289.0,
+        "io_wait_ms": 61.2,
+        "metal_gb": 20.98,
+        "clock_end_ms": 15.06,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.5
+      }
+    },
+    {
+      "id": "r1-repeat128-q2-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 2,
+      "prompt": "128",
+      "wall_seconds": 32.430181334,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.48s, clock probe 13.15 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 0.2s waiting on fetches | GPU s: DeltaNet blocks 10.4, attention blocks 3.7, expert streams 15.3, MTP 0.6 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 30.55s (105.4 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 63.2 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 2.4 ms/step | n-gram gather 0.5 ms/step\ndecode 8 tokens in 1.02s (7.85 tok/s) | 6 steps, mean step 165.5 ms (min 104.3, max 268.3) | gpu-active 163.7 ms | io wait 35.0 ms (set 1.1, read 61.4) | sync fetches/step 57.7 + lookahead 156.3 (warm 0.0, cut 0.0) | pool 11162/11162 | 20.98 GB Metal\nclock probe at end 13.12 ms\n",
+      "output": "r1-repeat128-q2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.48,
+        "clock_start_ms": 13.15,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 30.55,
+        "pp_s": 105.4,
+        "output_tokens": 8,
+        "decode_seconds": 1.02,
+        "tg_s": 7.85,
+        "steps": 6,
+        "mean_step_ms": 165.5,
+        "gpu_active_ms": 163.7,
+        "io_wait_ms": 35.0,
+        "metal_gb": 20.98,
+        "clock_end_ms": 13.12,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r1-repeat128-q2-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 2,
+      "prompt": "128",
+      "wall_seconds": 32.04390220800002,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.48s, clock probe 12.51 ms\nprefill engine: 1 chunk(s) of up to 4096, 17095 expert records streamed (26.3 GB, 8 MB/token), 4.0s waiting for ring reuse | GPU s: DeltaNet blocks 11.5, attention blocks 4.1, expert streams 13.5, MTP 0.6 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 30.25s (106.5 tok/s) [engine]\n  dispatches/step 2232 | cpu turnaround 68.0 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 2.3 ms/step | n-gram gather 0.5 ms/step\ndecode 8 tokens in 0.87s (9.20 tok/s) | 5 steps, mean step 169.9 ms (min 117.2, max 264.8) | gpu-active 168.1 ms | io wait 34.6 ms (set 1.1, read 65.9) | sync fetches/step 55.8 + lookahead 176.0 (warm 0.0, cut 0.0) | pool 11162/11162 | 20.98 GB Metal\nclock probe at end 13.01 ms\n",
+      "output": "r1-repeat128-q2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.48,
+        "clock_start_ms": 12.51,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 30.25,
+        "pp_s": 106.5,
+        "output_tokens": 8,
+        "decode_seconds": 0.87,
+        "tg_s": 9.2,
+        "steps": 5,
+        "mean_step_ms": 169.9,
+        "gpu_active_ms": 168.1,
+        "io_wait_ms": 34.6,
+        "metal_gb": 20.98,
+        "clock_end_ms": 13.01,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r2-repeat4-q3-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 3,
+      "prompt": "4",
+      "wall_seconds": 10.174456915999997,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.45s, clock probe 13.67 ms\nprefill engine: 1 chunk(s) of up to 4096, 9618 expert records streamed (20.8 GB, 172 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 0.8, attention blocks 0.2, expert streams 6.9, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 8.21s (14.7 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 85.6 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 3.5 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.15s (6.94 tok/s) | 5 steps, mean step 225.1 ms (min 164.3, max 305.8) | gpu-active 223.8 ms | io wait 48.3 ms (set 0.8, read 84.0) | sync fetches/step 61.4 + lookahead 165.4 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 14.52 ms\n",
+      "output": "r2-repeat4-q3-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 13.67,
+        "prompt_tokens": 121,
+        "prefill_seconds": 8.21,
+        "pp_s": 14.7,
+        "output_tokens": 8,
+        "decode_seconds": 1.15,
+        "tg_s": 6.94,
+        "steps": 5,
+        "mean_step_ms": 225.1,
+        "gpu_active_ms": 223.8,
+        "io_wait_ms": 48.3,
+        "metal_gb": 20.98,
+        "clock_end_ms": 14.52,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r2-repeat4-q3-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 3,
+      "prompt": "4",
+      "wall_seconds": 15.562585417000037,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.45s, clock probe 14.05 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 1.0, attention blocks 0.3, expert streams 11.7, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 121 tokens in 13.53s (8.9 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 72.1 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.4 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.21s (6.63 tok/s) | 6 steps, mean step 197.2 ms (min 125.2, max 303.5) | gpu-active 196.0 ms | io wait 40.5 ms (set 0.7, read 70.6) | sync fetches/step 50.7 + lookahead 135.5 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 12.52 ms\n",
+      "output": "r2-repeat4-q3-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 14.05,
+        "prompt_tokens": 121,
+        "prefill_seconds": 13.53,
+        "pp_s": 8.9,
+        "output_tokens": 8,
+        "decode_seconds": 1.21,
+        "tg_s": 6.63,
+        "steps": 6,
+        "mean_step_ms": 197.2,
+        "gpu_active_ms": 196.0,
+        "io_wait_ms": 40.5,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.52,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r2-repeat4-q2-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 2,
+      "prompt": "4",
+      "wall_seconds": 7.4416333340000165,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.44s, clock probe 12.50 ms\nprefill engine: 1 chunk(s) of up to 4096, 9411 expert records streamed (14.5 GB, 120 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 0.7, attention blocks 0.2, expert streams 4.8, MTP 0.1 | n-gram gather 0.0s CPU\nprefill 121 tokens in 5.94s (20.4 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 32.4 ms/step | drafts 2, accepted 1.00/step (1.60 tokens/step) | mtp 3.7 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 0.73s (10.91 tok/s) | 5 steps, mean step 141.7 ms (min 104.0, max 211.4) | gpu-active 140.5 ms | io wait 24.1 ms (set 0.7, read 31.0) | sync fetches/step 35.4 + lookahead 113.8 (warm 0.0, cut 0.0) | pool 10126/11162 | 20.98 GB Metal\nclock probe at end 12.42 ms\n",
+      "output": "r2-repeat4-q2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.44,
+        "clock_start_ms": 12.5,
+        "prompt_tokens": 121,
+        "prefill_seconds": 5.94,
+        "pp_s": 20.4,
+        "output_tokens": 8,
+        "decode_seconds": 0.73,
+        "tg_s": 10.91,
+        "steps": 5,
+        "mean_step_ms": 141.7,
+        "gpu_active_ms": 140.5,
+        "io_wait_ms": 24.1,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.42,
+        "drafts": 2,
+        "accepted_drafts_per_step": 1.0
+      }
+    },
+    {
+      "id": "r2-repeat4-q2-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 2,
+      "prompt": "4",
+      "wall_seconds": 14.307311791000018,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.45s, clock probe 12.27 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 1.0, attention blocks 0.3, expert streams 11.0, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 121 tokens in 12.78s (9.5 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 35.0 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 3.0 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 0.75s (10.69 tok/s) | 5 steps, mean step 145.0 ms (min 99.6, max 215.9) | gpu-active 143.7 ms | io wait 24.4 ms (set 0.7, read 33.6) | sync fetches/step 36.4 + lookahead 117.2 (warm 0.0, cut 0.0) | pool 10222/11162 | 20.98 GB Metal\nclock probe at end 12.30 ms\n",
+      "output": "r2-repeat4-q2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 12.27,
+        "prompt_tokens": 121,
+        "prefill_seconds": 12.78,
+        "pp_s": 9.5,
+        "output_tokens": 8,
+        "decode_seconds": 0.75,
+        "tg_s": 10.69,
+        "steps": 5,
+        "mean_step_ms": 145.0,
+        "gpu_active_ms": 143.7,
+        "io_wait_ms": 24.4,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.3,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r2-repeat4-q4-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 4,
+      "prompt": "4",
+      "wall_seconds": 12.587284875000023,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.42s, clock probe 12.31 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 0.9, attention blocks 0.3, expert streams 8.5, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 10.11s (12.0 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 112.0 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.9 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.68s (4.77 tok/s) | 6 steps, mean step 274.7 ms (min 147.3, max 487.1) | gpu-active 273.5 ms | io wait 60.5 ms (set 0.7, read 110.4) | sync fetches/step 63.5 + lookahead 171.7 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 17.14 ms\n",
+      "output": "r2-repeat4-q4-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.42,
+        "clock_start_ms": 12.31,
+        "prompt_tokens": 121,
+        "prefill_seconds": 10.11,
+        "pp_s": 12.0,
+        "output_tokens": 8,
+        "decode_seconds": 1.68,
+        "tg_s": 4.77,
+        "steps": 6,
+        "mean_step_ms": 274.7,
+        "gpu_active_ms": 273.5,
+        "io_wait_ms": 60.5,
+        "metal_gb": 20.98,
+        "clock_end_ms": 17.14,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r2-repeat4-q4-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 4,
+      "prompt": "4",
+      "wall_seconds": 12.588356458000021,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.43s, clock probe 12.77 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 0.9, attention blocks 0.3, expert streams 8.5, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 10.13s (11.9 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 114.8 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.7 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.66s (4.83 tok/s) | 6 steps, mean step 271.4 ms (min 150.9, max 484.9) | gpu-active 270.2 ms | io wait 60.4 ms (set 0.7, read 113.3) | sync fetches/step 63.5 + lookahead 171.7 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 18.23 ms\n",
+      "output": "r2-repeat4-q4-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.43,
+        "clock_start_ms": 12.77,
+        "prompt_tokens": 121,
+        "prefill_seconds": 10.13,
+        "pp_s": 11.9,
+        "output_tokens": 8,
+        "decode_seconds": 1.66,
+        "tg_s": 4.83,
+        "steps": 6,
+        "mean_step_ms": 271.4,
+        "gpu_active_ms": 270.2,
+        "io_wait_ms": 60.4,
+        "metal_gb": 20.98,
+        "clock_end_ms": 18.23,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r2-repeat20-q3-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 3,
+      "prompt": "20",
+      "wall_seconds": 14.70345558300005,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.45s, clock probe 12.49 ms\nprefill engine: 1 chunk(s) of up to 4096, 13862 expert records streamed (30.0 GB, 58 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 1.6, attention blocks 0.5, expert streams 9.9, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 521 tokens in 12.39s (42.0 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 109.4 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.7 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.50s (5.33 tok/s) | 6 steps, mean step 245.8 ms (min 144.4, max 419.1) | gpu-active 244.5 ms | io wait 47.5 ms (set 0.9, read 107.7) | sync fetches/step 59.7 + lookahead 205.5 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 13.77 ms\n",
+      "output": "r2-repeat20-q3-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 12.49,
+        "prompt_tokens": 521,
+        "prefill_seconds": 12.39,
+        "pp_s": 42.0,
+        "output_tokens": 8,
+        "decode_seconds": 1.5,
+        "tg_s": 5.33,
+        "steps": 6,
+        "mean_step_ms": 245.8,
+        "gpu_active_ms": 244.5,
+        "io_wait_ms": 47.5,
+        "metal_gb": 20.98,
+        "clock_end_ms": 13.77,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r2-repeat20-q3-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 3,
+      "prompt": "20",
+      "wall_seconds": 19.581001500000013,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.45s, clock probe 12.68 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 2.1, attention blocks 0.6, expert streams 14.1, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 17.36s (30.0 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 117.2 ms/step | drafts 2, accepted 1.00/step (1.60 tokens/step) | mtp 4.9 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.40s (5.72 tok/s) | 5 steps, mean step 273.5 ms (min 182.7, max 421.2) | gpu-active 272.2 ms | io wait 54.8 ms (set 1.2, read 115.1) | sync fetches/step 69.2 + lookahead 242.2 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 17.34 ms\n",
+      "output": "r2-repeat20-q3-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 12.68,
+        "prompt_tokens": 521,
+        "prefill_seconds": 17.36,
+        "pp_s": 30.0,
+        "output_tokens": 8,
+        "decode_seconds": 1.4,
+        "tg_s": 5.72,
+        "steps": 5,
+        "mean_step_ms": 273.5,
+        "gpu_active_ms": 272.2,
+        "io_wait_ms": 54.8,
+        "metal_gb": 20.98,
+        "clock_end_ms": 17.34,
+        "drafts": 2,
+        "accepted_drafts_per_step": 1.0
+      }
+    },
+    {
+      "id": "r2-repeat20-q2-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 2,
+      "prompt": "20",
+      "wall_seconds": 11.138636958999996,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.46s, clock probe 14.08 ms\nprefill engine: 1 chunk(s) of up to 4096, 13565 expert records streamed (20.9 GB, 40 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 1.6, attention blocks 0.5, expert streams 7.1, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 521 tokens in 9.49s (54.9 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 44.3 ms/step | drafts 2, accepted 0.50/step (1.33 tokens/step) | mtp 2.2 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 0.83s (9.66 tok/s) | 6 steps, mean step 134.0 ms (min 106.1, max 206.8) | gpu-active 132.6 ms | io wait 25.9 ms (set 0.8, read 42.7) | sync fetches/step 40.5 + lookahead 115.3 (warm 0.0, cut 0.0) | pool 11162/11162 | 20.98 GB Metal\nclock probe at end 12.56 ms\n",
+      "output": "r2-repeat20-q2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.46,
+        "clock_start_ms": 14.08,
+        "prompt_tokens": 521,
+        "prefill_seconds": 9.49,
+        "pp_s": 54.9,
+        "output_tokens": 8,
+        "decode_seconds": 0.83,
+        "tg_s": 9.66,
+        "steps": 6,
+        "mean_step_ms": 134.0,
+        "gpu_active_ms": 132.6,
+        "io_wait_ms": 25.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.56,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.5
+      }
+    },
+    {
+      "id": "r2-repeat20-q2-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 2,
+      "prompt": "20",
+      "wall_seconds": 18.951885667,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.45s, clock probe 13.39 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 2.1, attention blocks 0.6, expert streams 14.0, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 17.28s (30.2 tok/s) [engine]\n  dispatches/step 2193 | cpu turnaround 52.7 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 2.3 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 0.87s (9.25 tok/s) | 5 steps, mean step 168.9 ms (min 118.5, max 247.8) | gpu-active 167.6 ms | io wait 31.7 ms (set 1.0, read 50.9) | sync fetches/step 51.4 + lookahead 155.8 (warm 0.0, cut 0.0) | pool 11162/11162 | 20.98 GB Metal\nclock probe at end 12.97 ms\n",
+      "output": "r2-repeat20-q2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 13.39,
+        "prompt_tokens": 521,
+        "prefill_seconds": 17.28,
+        "pp_s": 30.2,
+        "output_tokens": 8,
+        "decode_seconds": 0.87,
+        "tg_s": 9.25,
+        "steps": 5,
+        "mean_step_ms": 168.9,
+        "gpu_active_ms": 167.6,
+        "io_wait_ms": 31.7,
+        "metal_gb": 20.98,
+        "clock_end_ms": 12.97,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r2-repeat20-q4-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 4,
+      "prompt": "20",
+      "wall_seconds": 18.05814537499998,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.42s, clock probe 12.50 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 1.9, attention blocks 0.5, expert streams 12.3, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 15.25s (34.2 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 203.2 ms/step | drafts 2, accepted 1.00/step (1.60 tokens/step) | mtp 6.9 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.99s (4.01 tok/s) | 5 steps, mean step 390.4 ms (min 239.9, max 621.7) | gpu-active 389.0 ms | io wait 80.9 ms (set 1.1, read 201.1) | sync fetches/step 85.6 + lookahead 288.8 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 23.54 ms\n",
+      "output": "r2-repeat20-q4-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.42,
+        "clock_start_ms": 12.5,
+        "prompt_tokens": 521,
+        "prefill_seconds": 15.25,
+        "pp_s": 34.2,
+        "output_tokens": 8,
+        "decode_seconds": 1.99,
+        "tg_s": 4.01,
+        "steps": 5,
+        "mean_step_ms": 390.4,
+        "gpu_active_ms": 389.0,
+        "io_wait_ms": 80.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 23.54,
+        "drafts": 2,
+        "accepted_drafts_per_step": 1.0
+      }
+    },
+    {
+      "id": "r2-repeat20-q4-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 4,
+      "prompt": "20",
+      "wall_seconds": 18.03690129200004,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.43s, clock probe 12.60 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 1.9, attention blocks 0.5, expert streams 12.3, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 15.18s (34.3 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 202.4 ms/step | drafts 2, accepted 1.00/step (1.60 tokens/step) | mtp 6.5 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 2.03s (3.94 tok/s) | 5 steps, mean step 397.5 ms (min 264.4, max 632.4) | gpu-active 396.2 ms | io wait 80.9 ms (set 1.1, read 200.3) | sync fetches/step 85.6 + lookahead 288.8 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 24.06 ms\n",
+      "output": "r2-repeat20-q4-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.43,
+        "clock_start_ms": 12.6,
+        "prompt_tokens": 521,
+        "prefill_seconds": 15.18,
+        "pp_s": 34.3,
+        "output_tokens": 8,
+        "decode_seconds": 2.03,
+        "tg_s": 3.94,
+        "steps": 5,
+        "mean_step_ms": 397.5,
+        "gpu_active_ms": 396.2,
+        "io_wait_ms": 80.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 24.06,
+        "drafts": 2,
+        "accepted_drafts_per_step": 1.0
+      }
+    },
+    {
+      "id": "r2-repeat128-q3-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 3,
+      "prompt": "128",
+      "wall_seconds": 30.041759749999983,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.47s, clock probe 12.86 ms\nprefill engine: 1 chunk(s) of up to 4096, 17339 expert records streamed (37.5 GB, 12 MB/token), 0.5s waiting for ring reuse | GPU s: DeltaNet blocks 9.8, attention blocks 3.4, expert streams 13.1, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 27.36s (117.7 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 148.2 ms/step | drafts 2, accepted 0.50/step (1.33 tokens/step) | mtp 3.7 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.81s (4.43 tok/s) | 6 steps, mean step 295.5 ms (min 183.9, max 496.3) | gpu-active 294.0 ms | io wait 61.4 ms (set 1.2, read 146.0) | sync fetches/step 78.2 + lookahead 258.7 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 19.20 ms\n",
+      "output": "r2-repeat128-q3-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.47,
+        "clock_start_ms": 12.86,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 27.36,
+        "pp_s": 117.7,
+        "output_tokens": 8,
+        "decode_seconds": 1.81,
+        "tg_s": 4.43,
+        "steps": 6,
+        "mean_step_ms": 295.5,
+        "gpu_active_ms": 294.0,
+        "io_wait_ms": 61.4,
+        "metal_gb": 20.98,
+        "clock_end_ms": 19.2,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.5
+      }
+    },
+    {
+      "id": "r2-repeat128-q3-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 3,
+      "prompt": "128",
+      "wall_seconds": 31.942603167000016,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "3-bit store (/path/to/model/packed/experts3.bin): 2162688 bytes per record, 78% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 7949 records, working-set limit 26.80 GB), load 0.46s, clock probe 13.17 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 0.1s waiting on fetches | GPU s: DeltaNet blocks 9.8, attention blocks 3.5, expert streams 15.2, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 29.52s (109.1 tok/s) [engine]\n  dispatches/step 2250 | cpu turnaround 162.2 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 3.3 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.57s (5.11 tok/s) | 5 steps, mean step 307.8 ms (min 198.5, max 505.4) | gpu-active 306.3 ms | io wait 64.7 ms (set 1.3, read 160.1) | sync fetches/step 82.8 + lookahead 280.8 (warm 0.0, cut 0.0) | pool 7949/7949 | 20.98 GB Metal\nclock probe at end 15.80 ms\n",
+      "output": "r2-repeat128-q3-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.46,
+        "clock_start_ms": 13.17,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 29.52,
+        "pp_s": 109.1,
+        "output_tokens": 8,
+        "decode_seconds": 1.57,
+        "tg_s": 5.11,
+        "steps": 5,
+        "mean_step_ms": 307.8,
+        "gpu_active_ms": 306.3,
+        "io_wait_ms": 64.7,
+        "metal_gb": 20.98,
+        "clock_end_ms": 15.8,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    },
+    {
+      "id": "r2-repeat128-q2-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 2,
+      "prompt": "128",
+      "wall_seconds": 31.04822491699997,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.49s, clock probe 13.02 ms\nprefill engine: 1 chunk(s) of up to 4096, 17095 expert records streamed (26.3 GB, 8 MB/token), 3.6s waiting for ring reuse | GPU s: DeltaNet blocks 11.2, attention blocks 4.0, expert streams 13.0, MTP 0.6 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 29.30s (109.9 tok/s) [engine]\n  dispatches/step 2232 | cpu turnaround 71.3 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 2.3 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 0.88s (9.10 tok/s) | 5 steps, mean step 171.7 ms (min 118.4, max 269.9) | gpu-active 170.2 ms | io wait 35.8 ms (set 1.1, read 69.4) | sync fetches/step 55.8 + lookahead 176.0 (warm 0.0, cut 0.0) | pool 11162/11162 | 20.98 GB Metal\nclock probe at end 13.04 ms\n",
+      "output": "r2-repeat128-q2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.49,
+        "clock_start_ms": 13.02,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 29.3,
+        "pp_s": 109.9,
+        "output_tokens": 8,
+        "decode_seconds": 0.88,
+        "tg_s": 9.1,
+        "steps": 5,
+        "mean_step_ms": 171.7,
+        "gpu_active_ms": 170.2,
+        "io_wait_ms": 35.8,
+        "metal_gb": 20.98,
+        "clock_end_ms": 13.04,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r2-repeat128-q2-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 2,
+      "prompt": "128",
+      "wall_seconds": 35.880899416000034,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for every record\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 11162 records, working-set limit 26.80 GB), load 0.47s, clock probe 12.13 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 0.9s waiting on fetches | GPU s: DeltaNet blocks 12.2, attention blocks 4.3, expert streams 16.1, MTP 0.7 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 33.99s (94.8 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 61.3 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 2.4 ms/step | n-gram gather 0.5 ms/step\ndecode 8 tokens in 1.03s (7.76 tok/s) | 6 steps, mean step 167.5 ms (min 108.4, max 272.8) | gpu-active 165.6 ms | io wait 34.8 ms (set 1.0, read 59.6) | sync fetches/step 57.7 + lookahead 156.3 (warm 0.0, cut 0.0) | pool 11162/11162 | 20.98 GB Metal\nclock probe at end 14.43 ms\n",
+      "output": "r2-repeat128-q2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.47,
+        "clock_start_ms": 12.13,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 33.99,
+        "pp_s": 94.8,
+        "output_tokens": 8,
+        "decode_seconds": 1.03,
+        "tg_s": 7.76,
+        "steps": 6,
+        "mean_step_ms": 167.5,
+        "gpu_active_ms": 165.6,
+        "io_wait_ms": 34.8,
+        "metal_gb": 20.98,
+        "clock_end_ms": 14.43,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r2-repeat128-q4-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 4,
+      "prompt": "128",
+      "wall_seconds": 41.64309183299997,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.49s, clock probe 12.29 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 1.8s waiting for ring reuse | GPU s: DeltaNet blocks 14.4, attention blocks 5.0, expert streams 17.7, MTP 0.8 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 38.56s (83.5 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 244.3 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 6.6 ms/step | n-gram gather 0.4 ms/step\ndecode 8 tokens in 2.20s (3.64 tok/s) | 5 steps, mean step 431.4 ms (min 247.8, max 732.4) | gpu-active 429.6 ms | io wait 91.0 ms (set 1.2, read 242.2) | sync fetches/step 97.0 + lookahead 327.4 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 18.89 ms\n",
+      "output": "r2-repeat128-q4-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.49,
+        "clock_start_ms": 12.29,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 38.56,
+        "pp_s": 83.5,
+        "output_tokens": 8,
+        "decode_seconds": 2.2,
+        "tg_s": 3.64,
+        "steps": 5,
+        "mean_step_ms": 431.4,
+        "gpu_active_ms": 429.6,
+        "io_wait_ms": 91.0,
+        "metal_gb": 20.98,
+        "clock_end_ms": 18.89,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    },
+    {
+      "id": "r2-repeat128-q4-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 4,
+      "prompt": "128",
+      "wall_seconds": 40.245922166000014,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "cherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.45s, clock probe 12.68 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 1.5s waiting on fetches | GPU s: DeltaNet blocks 13.8, attention blocks 4.8, expert streams 17.3, MTP 0.7 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 37.19s (86.6 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 254.0 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 7.1 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 2.22s (3.60 tok/s) | 5 steps, mean step 435.9 ms (min 256.4, max 727.2) | gpu-active 434.2 ms | io wait 92.2 ms (set 1.2, read 251.9) | sync fetches/step 97.0 + lookahead 327.4 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 16.68 ms\n",
+      "output": "r2-repeat128-q4-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 12.68,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 37.19,
+        "pp_s": 86.6,
+        "output_tokens": 8,
+        "decode_seconds": 2.22,
+        "tg_s": 3.6,
+        "steps": 5,
+        "mean_step_ms": 435.9,
+        "gpu_active_ms": 434.2,
+        "io_wait_ms": 92.2,
+        "metal_gb": 20.98,
+        "clock_end_ms": 16.68,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    }
+  ]
+}

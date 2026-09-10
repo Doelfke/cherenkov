@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "rounds": 3,
+  "max_ctx": 8192,
+  "configurations": [
+    {
+      "id": "exact-4bit",
+      "label": "4-bit",
+      "args": [
+        "--experts",
+        "4"
+      ],
+      "store_bits": null,
+      "reproducible_cut": true
+    },
+    {
+      "id": "misses-2bit",
+      "label": "4-bit resident / 2-bit misses + cut 0.08",
+      "args": [
+        "--experts",
+        "4",
+        "--miss-experts",
+        "2",
+        "--cut-weak",
+        "0.08"
+      ],
+      "store_bits": 2,
+      "reproducible_cut": false
+    },
+    {
+      "id": "all-3bit",
+      "label": "3-bit",
+      "args": [
+        "--experts",
+        "3"
+      ],
+      "store_bits": 3,
+      "reproducible_cut": true
+    },
+    {
+      "id": "all-2bit",
+      "label": "2-bit",
+      "args": [
+        "--experts",
+        "2"
+      ],
+      "store_bits": 2,
+      "reproducible_cut": true
+    }
+  ],
+  "cases": [
+    {
+      "id": "code",
+      "kind": "decode",
+      "prompt": "Write a Python function that reverses a singly linked list.",
+      "max_tokens": 4096,
+      "stop": "eos"
+    },
+    {
+      "id": "code-lru",
+      "kind": "decode",
+      "prompt": "Implement an LRU cache in Python with O(1) get and put, a fixed positive capacity, and no third-party dependencies. Include complete runnable code, tests for update and eviction, and a short explanation of the invariants.",
+      "max_tokens": 7168,
+      "stop": "eos"
+    },
+    {
+      "id": "debug-bisect",
+      "kind": "decode",
+      "prompt": "Debug this Python function intended to return the first index whose value is at least target, or len(a) if none exists:\n\ndef lower_bound(a, target):\n    lo, hi = 0, len(a) - 1\n    while lo < hi:\n        mid = (lo + hi) // 2\n        if a[mid] < target:\n            lo = mid\n        else:\n            hi = mid - 1\n    return lo\n\nExplain the failures, give a corrected implementation, state its loop invariant, and provide runnable tests including empty input, duplicates, and boundary targets.",
+      "max_tokens": 4096,
+      "stop": "eos"
+    },
+    {
+      "id": "prose",
+      "kind": "decode",
+      "prompt": "Explain why a hash table needs to handle collisions, with a short example.",
+      "max_tokens": 4096,
+      "stop": "eos"
+    },
+    {
+      "id": "reasoning",
+      "kind": "decode",
+      "prompt": "A workshop must produce 120 identical parts. Machine A makes 8 parts per hour and needs a 30-minute setup. Machine B makes 5 parts per hour and needs a 12-minute setup. Both setups begin at time zero, both machines run simultaneously after setup, and partial parts do not count. What is the earliest time all 120 parts can be finished? Show the arithmetic, account for integer completions, and check the immediately preceding completion time.",
+      "max_tokens": 7168,
+      "stop": "eos"
+    },
+    {
+      "id": "structured",
+      "kind": "decode",
+      "prompt": "Extract the following orders into a JSON array. Return only valid JSON, with keys order_id, customer, items (each has name, quantity, unit_price_usd), shipping_usd, and total_usd. Prices exclude shipping. Compute each total.\nOrder A17: Mira ordered 3 notebooks at $4.50 each and 2 pens at $1.25 each. Shipping was free.\nOrder B08: Jules ordered one desk lamp for $27.90 and four bulbs for $3.10 each; shipping cost $5.00.\nOrder C31: Sana ordered 2 mugs priced at $12.00 apiece. One mug was canceled before billing. Shipping was $2.50.",
+      "max_tokens": 4096,
+      "stop": "eos"
+    },
+    {
+      "id": "prefill-long",
+      "kind": "prefill",
+      "repeat_text": "The quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\n",
+      "repeat": 128,
+      "suffix": "\nSummarize this document in three sentences.",
+      "max_tokens": 1024,
+      "rounds": 1,
+      "stop": "eos"
+    },
+    {
+      "id": "pelican",
+      "kind": "svg",
+      "prompt": "Generate an SVG of a pelican riding a bicycle. Keep it under 120 elements and close every tag.",
+      "max_tokens": 7168,
+      "max_ctx": 8192,
+      "rounds": 1,
+      "stop": "eos"
+    }
+  ]
+}

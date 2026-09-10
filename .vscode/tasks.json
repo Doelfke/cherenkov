@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "check-metal",
+      "type": "shell",
+      "command": "mise run check-metal",
+      "group": "build",
+      "presentation": { "reveal": "silent", "panel": "dedicated" },
+      "problemMatcher": {
+        "owner": "metal",
+        "source": "metal",
+        // #line directives in the assembled library are relative to kernels/.
+        "fileLocation": ["relative", "${workspaceFolder}/kernels"],
+        "pattern": {
+          "regexp": "^(.+\\.metal):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.*)$",
+          "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+        }
+      }
+    }
+  ]
+}

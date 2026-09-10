@@ -1,0 +1,50 @@
+### Why Hash Tables Need to Handle Collisions
+
+To understand why collisions must be handled, we must first look at the fundamental mechanism of a hash table.
+
+**1. The Mapping Problem (Many-to-One)**
+A hash table works by using a **hash function** to convert a key (like a string or object) into an integer index, which points to a specific "bucket" or slot in an array.
+*   **Input Space:** The number of possible keys is effectively infinite (e.g., any string of any length).
+*   **Output Space:** The number of buckets in the array is finite (e.g., 100 slots).
+
+Because you are mapping an infinite set of inputs to a finite set of outputs, it is mathematically guaranteed that **two different keys will eventually produce the same hash value**.
+
+**2. The Consequence of Ignoring Collisions**
+If a hash table did not have a mechanism to handle collisions (such as chaining or open addressing), the second key to arrive would overwrite the first key.
+*   **Data Loss:** You would lose the data associated with the first key.
+*   **Retrieval Failure:** If you tried to look up the first key later, the system would return the data for the second key (or nothing), resulting in incorrect results.
+
+---
+
+### Short Example
+
+Imagine a simplified hash table with only **2 slots** (indices 0 and 1).
+
+**The Hash Function:**
+We use a simple function: `Hash(Key) = Length of Key % 2`.
+
+**Step 1: Inserting "Apple"**
+*   Key: `"Apple"`
+*   Calculation: Length is 5. $5 \pmod 2 = 1$.
+*   Action: Store `"Apple"` at **Index 1**.
+
+**Step 2: Inserting "Banana"**
+*   Key: `"Banana"`
+*   Calculation: Length is 6. $6 \pmod 2 = 0$.
+*   Action: Store `"Banana"` at **Index 0**.
+
+**Step 3: Inserting "Cherry" (The Collision)**
+*   Key: `"Cherry"`
+*   Calculation: Length is 6. $6 \pmod 2 = 0$.
+*   **Collision:** Index 0 is already occupied by `"Banana"`.
+
+**If we do NOT handle collisions:**
+The system overwrites Index 0 with `"Cherry"`.
+*   If you search for `"Banana"` now, the system looks at Index 0, finds `"Cherry"`, and fails to find `"Banana"`.
+
+**If we DO handle collisions (e.g., via Chaining):**
+The system sees Index 0 is occupied. It creates a linked list (or similar structure) at Index 0 containing both `"Banana"` and `"Cherry"`.
+*   If you search for `"Banana"`, the system looks at Index 0, checks the list, finds `"Banana"`, and returns the correct data.
+
+### Conclusion
+Hash tables must handle collisions because **different keys inevitably map to the same index**. Without collision resolution strategies (like separate chaining or open addressing), the data structure would suffer from data loss and incorrect retrieval.

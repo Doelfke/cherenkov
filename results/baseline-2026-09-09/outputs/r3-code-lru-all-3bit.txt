@@ -1,0 +1,271 @@
+```python
+"""
+LRU Cache implementation with O(1) get and put operations.
+
+Uses a doubly-linked list (via OrderedDict-like structure implemented manually)
+and a hash map to achieve O(1) operations.
+
+Invariants:
+1. The cache never exceeds its fixed positive capacity.
+2. The most recently used item is always at the head of the linked list.
+3. The least recently used item is always at the tail of the linked list.
+4. Every key in the hash map corresponds to a node in the linked list, and vice versa.
+5. On get(key), the accessed node is moved to the head (most recently used).
+6. On put(key, value), if key exists, its value is updated and node moved to head.
+   If key doesn't exist, a new node is added to head; if capacity exceeded, tail is evicted.
+"""
+
+from collections import OrderedDict
+
+
+class LRUCache:
+    """
+    LRU Cache with O(1) get and put operations.
+    
+    Uses an OrderedDict to maintain insertion order (which acts as recency order)
+    and provides O(1) operations via dict-like access and move_to_end.
+    
+    Alternatively, we implement a doubly-linked list + dict approach for clarity.
+    Here we use the manual doubly-linked list approach to demonstrate the core idea.
+    """
+    
+    class _Node:
+        """Doubly-linked list node."""
+        __slots__ = ('key', 'value', 'prev', 'next')
+        
+        def __init__(self, key, value):
+            self.key = key
+            self.value = value
+            self.prev = None
+            self.next = None
+    
+    def __init__(self, capacity: int):
+        """
+        Initialize the LRU cache with a fixed positive capacity.
+        
+        Args:
+            capacity: A positive integer representing the maximum number of items.
+        
+        Raises:
+            ValueError: If capacity is not a positive integer.
+        """
+        if not isinstance(capacity, int) or capacity <= 0:
+            raise ValueError("Capacity must be a positive integer")
+        
+        self.capacity = capacity
+        self.cache = {}  # key -> Node
+        # Dummy head and tail to simplify edge cases
+        self.head = self._Node(None, None)  # Most recently used side
+        self.tail = self._Node(None, None)  # Least recently used side
+        self.head.next = self.tail
+        self.tail.prev = self.head
+    
+    def _remove(self, node: '_Node') -> None:
+        """Remove a node from the doubly-linked list."""
+        node.prev.next = node.next
+        node.next.prev = node.prev
+    
+    def _add_to_head(self, node: '_Node') -> None:
+        """Add a node right after the head (most recently used position)."""
+        node.prev = self.head
+        node.next = self.head.next
+        self.head.next.prev = node
+        self.head.next = node
+    
+    def _move_to_head(self, node: '_Node') -> None:
+        """Move an existing node to the head (most recently used)."""
+        self._remove(node)
+        self._add_to_head(node)
+    
+    def get(self, key):
+        """
+        Get the value for the given key if it exists in the cache.
+        
+        Args:
+            key: The key to look up.
+        
+        Returns:
+            The value associated with the key, or -1 if not found.
+        """
+        if key not in self.cache:
+            return -1
+        
+        node = self.cache[key]
+        self._move_to_head(node)
+        return node.value
+    
+    def put(self, key, value) -> None:
+        """
+        Insert or update the key-value pair in the cache.
+        
+        If the key already exists, update its value and mark as most recently used.
+        If the key doesn't exist, insert it as most recently used.
+        If the cache exceeds capacity, evict the least recently used item.
+        
+        Args:
+            key: The key to insert or update.
+            value: The value to associate with the key.
+        """
+        if key in self.cache:
+            node = self.cache[key]
+            node.value = value
+            self._move_to_head(node)
+        else:
+            new_node = self._Node(key, value)
+            self.cache[key] = new_node
+            self._add_to_head(new_node)
+            
+            if len(self.cache) > self.capacity:
+                # Evict the least recently used (tail's prev)
+                lru_node = self.tail.prev
+                self._remove(lru_node)
+                del self.cache[lru_node.key]
+
+
+# ==================== Tests ====================
+
+def test_basic_get_put():
+    """Test basic get and put operations."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    assert cache.get(1) == 1
+    assert cache.get(2) == 2
+    assert cache.get(3) == -1  # Not found
+
+
+def test_update_existing_key():
+    """Test that updating an existing key works correctly."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.put(1, 10)  # Update key 1
+    assert cache.get(1) == 10
+    assert cache.get(2) == 2
+
+
+def test_eviction_order():
+    """Test that eviction removes the least recently used item."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    # Access key 1 to make it most recently used
+    assert cache.get(1) == 1
+    # Now key 2 is least recently used
+    cache.put(3, 3)  # Should evict key 2
+    assert cache.get(2) == -1  # Key 2 should be evicted
+    assert cache.get(1) == 1
+    assert cache.get(3) == 3
+
+
+def test_eviction_after_update():
+    """Test that updating a key affects eviction order."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.put(1, 10)  # Update key 1, so key 2 is now LRU
+    cache.put(3, 3)   # Should evict key 2
+    assert cache.get(2) == -1
+    assert cache.get(1) == 10
+    assert cache.get(3) == 3
+
+
+def test_capacity_one():
+    """Test cache with capacity 1."""
+    cache = LRUCache(1)
+    cache.put(1, 1)
+    assert cache.get(1) == 1
+    cache.put(2, 2)  # Should evict key 1
+    assert cache.get(1) == -1
+    assert cache.get(2) == 2
+
+
+def test_multiple_evictions():
+    """Test multiple evictions in sequence."""
+    cache = LRUCache(3)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.put(3, 3)
+    cache.put(4, 4)  # Evicts key 1
+    assert cache.get(1) == -1
+    assert cache.get(2) == 2
+    assert cache.get(3) == 3
+    assert cache.get(4) == 4
+    cache.put(5, 5)  # Evicts key 2
+    assert cache.get(2) == -1
+    assert cache.get(3) == 3
+    assert cache.get(4) == 4
+    assert cache.get(5) == 5
+
+
+def test_get_moves_to_head():
+    """Test that get() moves the accessed item to most recently used."""
+    cache = LRUCache(3)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.put(3, 3)
+    # Access key 1, so order becomes 1, 3, 2 (1 is MRU, 2 is LRU)
+    assert cache.get(1) == 1
+    cache.put(4, 4)  # Should evict key 2 (LRU)
+    assert cache.get(2) == -1
+    assert cache.get(1) == 1
+    assert cache.get(3) == 3
+    assert cache.get(4) == 4
+
+
+def test_invalid_capacity():
+    """Test that invalid capacity raises ValueError."""
+    try:
+        LRUCache(0)
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+    
+    try:
+        LRUCache(-1)
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+    
+    try:
+        LRUCache(1.5)
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+
+
+def test_string_keys_and_values():
+    """Test with string keys and values."""
+    cache = LRUCache(2)
+    cache.put("a", "hello")
+    cache.put("b", "world")
+    assert cache.get("a") == "hello"
+    cache.put("c", "foo")  # Evicts "b"
+    assert cache.get("b") == -1
+    assert cache.get("a") == "hello"
+    assert cache.get("c") == "foo"
+
+
+def test_same_key_different_values():
+    """Test that same key can be updated multiple times."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(1, 2)
+    cache.put(1, 3)
+    assert cache.get(1) == 3
+
+
+if __name__ == "__main__":
+    # Run all tests
+    test_basic_get_put()
+    test_update_existing_key()
+    test_eviction_order()
+    test_eviction_after_update()
+    test_capacity_one()
+    test_multiple_evictions()
+    test_get_moves_to_head()
+    test_invalid_capacity()
+    test_string_keys_and_values()
+    test_same_key_different_values()
+    print("All tests passed!")
+```

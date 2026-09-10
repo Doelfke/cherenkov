@@ -1,0 +1,9 @@
+/target
+# Keep local measurements out of Git; curated reports are already tracked.
+/results/
+*.safetensors
+*.log
+__pycache__/
+*.py[cod]
+.DS_Store
+.clangd

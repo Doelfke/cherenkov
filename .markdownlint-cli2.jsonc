@@ -1,0 +1,10 @@
+{
+  "globs": ["**/*.md"],
+  "ignores": ["target/**", "node_modules/**"],
+  "config": {
+    "default": true,
+    // Wrap prose, but keep commands and Markdown table rows intact.
+    "MD013": { "line_length": 80, "code_blocks": false, "tables": false },
+    "MD060": { "style": "compact" }
+  }
+}

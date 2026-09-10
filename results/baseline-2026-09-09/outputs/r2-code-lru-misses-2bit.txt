@@ -1,0 +1,180 @@
+```python
+"""
+LRU Cache implementation with O(1) get and put operations.
+
+Uses a doubly-linked list (via OrderedDict-like structure) and a hash map
+to achieve O(1) time complexity for both get and put operations.
+
+Invariants:
+1. The cache never exceeds its fixed capacity.
+2. The most recently used item is always at the head of the linked list.
+3. The least recently used item is always at the tail of the linked list.
+4. When capacity is reached, the least recently used item (tail) is evicted
+   before inserting a new item.
+5. Accessing an item via get() or updating via put() moves it to the head
+   (most recently used position).
+"""
+
+from collections import OrderedDict
+
+
+class LRUCache:
+    """
+    LRU Cache with O(1) get and put operations.
+    
+    Uses OrderedDict which maintains insertion order and provides O(1)
+    move_to_end and popitem operations.
+    """
+    
+    def __init__(self, capacity: int):
+        """
+        Initialize the LRU cache with a fixed positive capacity.
+        
+        Args:
+            capacity: Positive integer specifying the maximum number of items.
+            
+        Raises:
+            ValueError: If capacity is not a positive integer.
+        """
+        if not isinstance(capacity, int) or capacity <= 0:
+            raise ValueError("Capacity must be a positive integer")
+        self.capacity = capacity
+        # OrderedDict maintains insertion order; we use it as our doubly-linked list
+        # Keys are cache keys, values are cache values
+        self.cache: OrderedDict = OrderedDict()
+    
+    def get(self, key: int) -> int:
+        """
+        Get the value for the given key.
+        
+        Args:
+            key: The key to look up.
+            
+        Returns:
+            The value associated with the key, or -1 if not found.
+        """
+        if key not in self.cache:
+            return -1
+        # Move to end (most recently used)
+        self.cache.move_to_end(key)
+        return self.cache[key]
+    
+    def put(self, key: int, value: int) -> None:
+        """
+        Insert or update the key-value pair.
+        
+        If the key already exists, update its value and mark as most recently used.
+        If the cache is at capacity, evict the least recently used item before inserting.
+        
+        Args:
+            key: The key to insert or update.
+            value: The value to associate with the key.
+        """
+        if key in self.cache:
+            # Update existing key and move to end (most recently used)
+            self.cache[key] = value
+            self.cache.move_to_end(key)
+        else:
+            # Check if we need to evict
+            if len(self.cache) >= self.capacity:
+                # Pop the least recently used item (first item in OrderedDict)
+                self.cache.popitem(last=False)
+            # Insert new key-value pair at the end (most recently used)
+            self.cache[key] = value
+
+
+def test_update():
+    """Test that updating an existing key works correctly."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    assert cache.get(1) == 1  # Returns 1
+    cache.put(1, 10)  # Update key 1
+    assert cache.get(1) == 10  # Returns updated value 10
+    assert cache.get(2) == 2  # Key 2 should still be there
+    print("test_update passed")
+
+
+def test_eviction():
+    """Test that eviction of least recently used items works correctly."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    # Cache is now full: {1: 1, 2: 2} with 2 being most recently used
+    cache.put(3, 3)  # Evicts key 1 (least recently used)
+    assert cache.get(1) == -1  # Key 1 was evicted
+    assert cache.get(2) == 2  # Key 2 still present
+    assert cache.get(3) == 3  # Key 3 was just added
+    
+    # Test that accessing an item makes it most recently used
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.get(1)  # Access key 1, making it most recently used
+    cache.put(3, 3)  # Should evict key 2 (least recently used)
+    assert cache.get(2) == -1  # Key 2 was evicted
+    assert cache.get(1) == 1  # Key 1 still present
+    assert cache.get(3) == 3  # Key 3 was just added
+    print("test_eviction passed")
+
+
+def test_capacity_one():
+    """Test cache with capacity 1."""
+    cache = LRUCache(1)
+    cache.put(1, 1)
+    assert cache.get(1) == 1
+    cache.put(2, 2)  # Evicts key 1
+    assert cache.get(1) == -1
+    assert cache.get(2) == 2
+    print("test_capacity_one passed")
+
+
+def test_invalid_capacity():
+    """Test that invalid capacity raises ValueError."""
+    try:
+        LRUCache(0)
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+    try:
+        LRUCache(-1)
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+    try:
+        LRUCache(1.5)
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+    print("test_invalid_capacity passed")
+
+
+def test_multiple_updates():
+    """Test multiple updates to the same key."""
+    cache = LRUCache(3)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.put(3, 3)
+    cache.put(1, 10)  # Update key 1
+    cache.put(2, 20)  # Update key 2
+    cache.put(3, 30)  # Update key 3
+    assert cache.get(1) == 10
+    assert cache.get(2) == 20
+    assert cache.get(3) == 30
+    # Now 3 is most recently used, 1 is least recently used
+    cache.put(4, 4)  # Should evict key 1
+    assert cache.get(1) == -1
+    assert cache.get(2) == 20
+    assert cache.get(3) == 30
+    assert cache.get(4) == 4
+    print("test_multiple_updates passed")
+
+
+if __name__ == "__main__":
+    test_update()
+    test_eviction()
+    test_capacity_one()
+    test_invalid_capacity()
+    test_multiple_updates()
+    print("\nAll tests passed!")
+```

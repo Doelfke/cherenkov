@@ -1,0 +1,5 @@
+engine load 1.18s, clock probe 13.03 ms
+prefill 24 tokens in 5.00s (4.8 tok/s) [row batches]
+  dispatches/step 2224 | drafts 2, accepted 1.75/step (2.67 tokens/step)
+decode 64 tokens in 8.00s (8.00 tok/s) | 24 steps, mean step 300.0 ms (min 175.3, max 500.2) | gpu-active 200.0 ms | io wait 50.0 ms (set 0.9, read 60.1) | pool 6258/6258 | 20.98 GB Metal
+clock probe at end 13.16 ms

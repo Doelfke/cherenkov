@@ -1,0 +1,518 @@
+{
+  "binaries": {
+    "before": {
+      "path": "/private/tmp/cherenkov-before-lowbit-prefill",
+      "sha256": "41e2f348938237c84e2a4b6851342de430182eba0a38cc240ad5dc406183a36d"
+    },
+    "after": {
+      "path": "/private/tmp/cherenkov-lowbit-prefill-measured",
+      "sha256": "72f1c441be91357f7ca8d03d14ef0bd202f628622eee46e61783547a44957b87"
+    }
+  },
+  "source_commit": "b41843e7e3ee9d62b7440602fdfd697ed8de237f",
+  "source_diff": "diff --git a/benchmarks/prefill.py b/benchmarks/prefill.py\nindex 2c86303..511a67b 100644\n--- a/benchmarks/prefill.py\n+++ b/benchmarks/prefill.py\n@@ -10,29 +10,39 @@ from pathlib import Path\n from run import ROOT, digest, parse_metrics, power\n \n \n+CONFIGURATIONS = {'4': (4, 4), '3': (3, 3), '2': (2, 2), '4/3': (4, 3), '4/2': (4, 2)}\n+\n+\n+def precision(row):\n+    return row['bits'], row.get('miss_bits', row['bits'])\n+\n+\n def write_summary(out, report):\n     runs = [row for row in report['runs'] if row['valid']]\n     lines = [\n         '# Low-bit prefill comparison', '',\n         f\"{len(runs)} valid samples. Medians below exclude loading and conversion.\", '',\n-        '| Prompt tokens | Expert bits | Before PP/s | After PP/s | Change | Pairs |',\n+        '| Prompt tokens | Resident / miss bits | Before PP/s | After PP/s | Change | Pairs |',\n         '|---:|---:|---:|---:|---:|---:|',\n     ]\n+    configurations = list(dict.fromkeys(precision(r) for r in runs))\n     for prompt in report['prompts']:\n-        for bits in [4, 3, 2]:\n-            before = [r for r in runs if r['prompt'] == prompt and r['bits'] == bits and r['binary'] == 'before']\n-            after = [r for r in runs if r['prompt'] == prompt and r['bits'] == bits and r['binary'] == 'after']\n+        for bits, miss_bits in configurations:\n+            before = [r for r in runs if r['prompt'] == prompt and precision(r) == (bits, miss_bits) and r['binary'] == 'before']\n+            after = [r for r in runs if r['prompt'] == prompt and precision(r) == (bits, miss_bits) and r['binary'] == 'after']\n             if not before or not after:\n                 continue\n             a = median(r['metrics']['pp_s'] for r in before)\n             b = median(r['metrics']['pp_s'] for r in after)\n             tokens = before[0]['metrics']['prompt_tokens']\n-            lines.append(f'| {tokens} | {bits} | {a:.1f} | {b:.1f} | {100 * (b/a - 1):+.1f}% | {min(len(before), len(after))} |')\n-    lines += ['', *report['notes'], '', '## Output checks', '']\n-    for before in runs:\n-        if before['bits'] != 4 or before['binary'] != 'before':\n-            continue\n-        after = next((r for r in runs if r['round'] == before['round'] and r['prompt'] == before['prompt'] and r['bits'] == 4 and r['binary'] == 'after'), None)\n+            label = str(bits) if bits == miss_bits else f'{bits} / {miss_bits}'\n+            lines.append(f'| {tokens} | {label} | {a:.1f} | {b:.1f} | {100 * (b/a - 1):+.1f}% | {min(len(before), len(after))} |')\n+    lines += ['', *report['notes']]\n+    controls = [r for r in runs if precision(r) == (4, 4) and r['binary'] == 'before']\n+    if controls:\n+        lines += ['', '## Output checks', '']\n+    for before in controls:\n+        after = next((r for r in runs if r['round'] == before['round'] and r['prompt'] == before['prompt'] and precision(r) == (4, 4) and r['binary'] == 'after'), None)\n         if after:\n             same = (out / before['output']).read_bytes() == (out / after['output']).read_bytes()\n             lines.append(f\"- Round {before['round']}, {before['metrics']['prompt_tokens']} tokens: Q4 output {'identical' if same else 'DIFFERS'}.\")\n@@ -47,7 +57,11 @@ def main():\n     parser.add_argument('--model', type=Path, required=True)\n     parser.add_argument('--out', type=Path, required=True)\n     parser.add_argument('--rounds', type=int, default=2)\n+    parser.add_argument('--configs', nargs='+', choices=CONFIGURATIONS, default=['4', '3', '2'],\n+                        help='resident/miss precision; default: 4 3 2')\n     args = parser.parse_args()\n+    if len(set(args.configs)) != len(args.configs):\n+        parser.error('--configs must not contain duplicates')\n     if args.rounds < 1:\n         parser.error('--rounds must be positive')\n     args.out.mkdir(parents=True, exist_ok=True)\n@@ -62,33 +76,38 @@ def main():\n         'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),\n         'source_diff': subprocess.check_output(['git', 'diff', 'HEAD'], cwd=ROOT, text=True),\n         'prompts': prompts,\n+        'configurations': args.configs,\n+        'model': str(args.model.resolve()),\n         'notes': [\n             'Fresh processes, max_ctx=8192, adaptive pool, two adaptive drafts, no prefix cache.',\n             'Exactly eight decode tokens; this suite measures prefill, not complete answers or decode throughput.',\n             'Loading/conversion excluded; any store build invalidates the sample.',\n             'Power sampled at process boundaries; brief intervening changes may be missed.',\n             'Configurations and binary order rotate. Existing OS file caches are not purged.',\n+            'No deadline cut. Mixed mode uses --experts 4 with --miss-experts 2 or 3.',\n             'Low-bit prefill changes output relative to the earlier Q4-prefill implementation.',\n         ],\n         'runs': [],\n     }\n     for round_index in range(args.rounds):\n-        bits_order = [4, 3, 2]\n-        bits_order = bits_order[round_index % 3:] + bits_order[:round_index % 3]\n+        offset = round_index % len(args.configs)\n+        configurations = args.configs[offset:] + args.configs[:offset]\n         for length, prompt in prompts.items():\n-            for bits in bits_order:\n+            for config in configurations:\n+                bits, miss_bits = CONFIGURATIONS[config]\n+                tag = config.replace('/', '-miss')\n                 order = ['before', 'after'] if round_index % 2 == 0 else ['after', 'before']\n                 for label in order:\n-                    name = f'r{round_index + 1}-repeat{length}-q{bits}-{label}'\n+                    name = f'r{round_index + 1}-repeat{length}-q{tag}-{label}'\n                     command = [str(binaries[label]), str(args.model.resolve()), prompt,\n-                               '--experts', str(bits), '--max-ctx', '8192', '--max-tokens', '8', '--no-eos']\n+                               '--experts', str(bits), '--miss-experts', str(miss_bits), '--max-ctx', '8192', '--max-tokens', '8', '--no-eos']\n                     before = power()\n                     if before['source'] != 'ac':\n                         raise RuntimeError('benchmark requires AC power')\n                     start = time.monotonic()\n                     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=300)\n                     after = power()\n-                    row = {'id': name, 'round': round_index + 1, 'binary': label, 'bits': bits,\n+                    row = {'id': name, 'round': round_index + 1, 'binary': label, 'bits': bits, 'miss_bits': miss_bits,\n                            'prompt': length, 'wall_seconds': time.monotonic() - start,\n                            'power_before': before, 'power_after': after,\n                            'exit_code': result.returncode, 'stderr': result.stderr,\n",
+  "prompts": {
+    "4": "The quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\n\nSummarize this document in three sentences.",
+    "20": "The quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\n\nSummarize this document in three sentences.",
+    "128": "The quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\nThe quick brown fox jumps over the lazy dog. Each sentence is part of a repeated document used to measure prompt processing.\n\nSummarize this document in three sentences."
+  },
+  "configurations": [
+    "4/2"
+  ],
+  "model": "/path/to/model",
+  "notes": [
+    "Fresh processes, max_ctx=8192, adaptive pool, two adaptive drafts, no prefix cache.",
+    "Exactly eight decode tokens; this suite measures prefill, not complete answers or decode throughput.",
+    "Loading/conversion excluded; any store build invalidates the sample.",
+    "Power sampled at process boundaries; brief intervening changes may be missed.",
+    "Configurations and binary order rotate. Existing OS file caches are not purged.",
+    "No deadline cut. Mixed mode uses --experts 4 with --miss-experts 2 or 3.",
+    "Low-bit prefill changes output relative to the earlier Q4-prefill implementation.",
+    "These are two samples per cell with binary order reversed in round two. Mixed Q4/Q3 was not timed.",
+    "All samples reported 20.98 GB Metal after prefill scratch release; this is not a transient peak measurement.",
+    "Both binaries are the same pinned executables used in ../prefill-lowbit-2026-09-09/report.json; that report preserves the implementation source snapshot. The source fields here describe this benchmark harness invocation."
+  ],
+  "runs": [
+    {
+      "id": "r1-repeat4-q4-miss2-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "4",
+      "wall_seconds": 12.700357625,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.47s, clock probe 12.70 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 1.0, attention blocks 0.3, expert streams 8.5, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 10.33s (11.7 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 103.2 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.5 ms/step | n-gram gather 0.3 ms/step\ndecode 8 tokens in 1.53s (5.22 tok/s) | 6 steps, mean step 251.3 ms (min 136.3, max 492.0) | gpu-active 249.9 ms | io wait 39.1 ms (set 0.7, read 101.7) | sync fetches/step 62.7 + lookahead 171.3 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 15.31 ms\n",
+      "output": "r1-repeat4-q4-miss2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.47,
+        "clock_start_ms": 12.7,
+        "prompt_tokens": 121,
+        "prefill_seconds": 10.33,
+        "pp_s": 11.7,
+        "output_tokens": 8,
+        "decode_seconds": 1.53,
+        "tg_s": 5.22,
+        "steps": 6,
+        "mean_step_ms": 251.3,
+        "gpu_active_ms": 249.9,
+        "io_wait_ms": 39.1,
+        "metal_gb": 20.98,
+        "clock_end_ms": 15.31,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r1-repeat4-q4-miss2-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "4",
+      "wall_seconds": 11.783290459000002,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.66s, clock probe 12.20 ms\nprefill engine: 1 chunk(s) of up to 4096, 9531 expert records streamed (22.3 GB, 184 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 0.8, attention blocks 0.2, expert streams 7.4, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 8.83s (13.7 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 88.6 ms/step | drafts 2, accepted 0.50/step (1.33 tokens/step) | mtp 2.8 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.48s (5.41 tok/s) | 6 steps, mean step 241.7 ms (min 137.7, max 449.6) | gpu-active 240.4 ms | io wait 37.1 ms (set 0.7, read 87.2) | sync fetches/step 60.8 + lookahead 169.2 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 15.43 ms\n",
+      "output": "r1-repeat4-q4-miss2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.66,
+        "clock_start_ms": 12.2,
+        "prompt_tokens": 121,
+        "prefill_seconds": 8.83,
+        "pp_s": 13.7,
+        "output_tokens": 8,
+        "decode_seconds": 1.48,
+        "tg_s": 5.41,
+        "steps": 6,
+        "mean_step_ms": 241.7,
+        "gpu_active_ms": 240.4,
+        "io_wait_ms": 37.1,
+        "metal_gb": 20.98,
+        "clock_end_ms": 15.43,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.5
+      }
+    },
+    {
+      "id": "r1-repeat20-q4-miss2-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "20",
+      "wall_seconds": 17.827714625000002,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.46s, clock probe 13.55 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 1.9, attention blocks 0.5, expert streams 12.3, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 15.16s (34.4 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 173.8 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 3.9 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.81s (4.41 tok/s) | 5 steps, mean step 357.0 ms (min 221.7, max 570.2) | gpu-active 355.6 ms | io wait 50.2 ms (set 1.1, read 171.7) | sync fetches/step 84.2 + lookahead 286.8 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 20.57 ms\n",
+      "output": "r1-repeat20-q4-miss2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.46,
+        "clock_start_ms": 13.55,
+        "prompt_tokens": 521,
+        "prefill_seconds": 15.16,
+        "pp_s": 34.4,
+        "output_tokens": 8,
+        "decode_seconds": 1.81,
+        "tg_s": 4.41,
+        "steps": 5,
+        "mean_step_ms": 357.0,
+        "gpu_active_ms": 355.6,
+        "io_wait_ms": 50.2,
+        "metal_gb": 20.98,
+        "clock_end_ms": 20.57,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r1-repeat20-q4-miss2-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "20",
+      "wall_seconds": 14.9086875,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.47s, clock probe 12.59 ms\nprefill engine: 1 chunk(s) of up to 4096, 13988 expert records streamed (29.1 GB, 56 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 1.6, attention blocks 0.5, expert streams 9.6, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 521 tokens in 12.10s (43.1 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 158.3 ms/step | drafts 2, accepted 0.50/step (1.33 tokens/step) | mtp 3.6 ms/step | n-gram gather 0.3 ms/step\ndecode 8 tokens in 1.97s (4.07 tok/s) | 6 steps, mean step 322.0 ms (min 186.2, max 581.7) | gpu-active 320.6 ms | io wait 45.3 ms (set 1.0, read 156.4) | sync fetches/step 74.8 + lookahead 256.0 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 20.41 ms\n",
+      "output": "r1-repeat20-q4-miss2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.47,
+        "clock_start_ms": 12.59,
+        "prompt_tokens": 521,
+        "prefill_seconds": 12.1,
+        "pp_s": 43.1,
+        "output_tokens": 8,
+        "decode_seconds": 1.97,
+        "tg_s": 4.07,
+        "steps": 6,
+        "mean_step_ms": 322.0,
+        "gpu_active_ms": 320.6,
+        "io_wait_ms": 45.3,
+        "metal_gb": 20.98,
+        "clock_end_ms": 20.41,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.5
+      }
+    },
+    {
+      "id": "r1-repeat128-q4-miss2-before",
+      "round": 1,
+      "binary": "before",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "128",
+      "wall_seconds": 32.808381333,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.45s, clock probe 12.51 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 9.7, attention blocks 3.4, expert streams 15.8, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 29.91s (107.7 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 213.4 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 6.6 ms/step | n-gram gather 1.4 ms/step\ndecode 8 tokens in 2.05s (3.90 tok/s) | 5 steps, mean step 401.7 ms (min 229.9, max 702.1) | gpu-active 398.8 ms | io wait 58.2 ms (set 1.2, read 211.3) | sync fetches/step 96.6 + lookahead 326.0 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 17.85 ms\n",
+      "output": "r1-repeat128-q4-miss2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 12.51,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 29.91,
+        "pp_s": 107.7,
+        "output_tokens": 8,
+        "decode_seconds": 2.05,
+        "tg_s": 3.9,
+        "steps": 5,
+        "mean_step_ms": 401.7,
+        "gpu_active_ms": 398.8,
+        "io_wait_ms": 58.2,
+        "metal_gb": 20.98,
+        "clock_end_ms": 17.85,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    },
+    {
+      "id": "r1-repeat128-q4-miss2-after",
+      "round": 1,
+      "binary": "after",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "128",
+      "wall_seconds": 29.053121082999994,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.46s, clock probe 12.76 ms\nprefill engine: 1 chunk(s) of up to 4096, 17457 expert records streamed (34.5 GB, 11 MB/token), 0.4s waiting for ring reuse | GPU s: DeltaNet blocks 9.8, attention blocks 3.4, expert streams 12.1, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 26.30s (122.5 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 206.8 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 4.2 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.91s (4.19 tok/s) | 5 steps, mean step 375.3 ms (min 213.0, max 688.1) | gpu-active 373.7 ms | io wait 54.5 ms (set 1.1, read 204.6) | sync fetches/step 92.8 + lookahead 319.2 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 19.85 ms\n",
+      "output": "r1-repeat128-q4-miss2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.46,
+        "clock_start_ms": 12.76,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 26.3,
+        "pp_s": 122.5,
+        "output_tokens": 8,
+        "decode_seconds": 1.91,
+        "tg_s": 4.19,
+        "steps": 5,
+        "mean_step_ms": 375.3,
+        "gpu_active_ms": 373.7,
+        "io_wait_ms": 54.5,
+        "metal_gb": 20.98,
+        "clock_end_ms": 19.85,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    },
+    {
+      "id": "r2-repeat4-q4-miss2-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "4",
+      "wall_seconds": 11.083611667,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.47s, clock probe 12.50 ms\nprefill engine: 1 chunk(s) of up to 4096, 9531 expert records streamed (22.3 GB, 184 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 0.8, attention blocks 0.2, expert streams 7.3, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 8.77s (13.8 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 91.3 ms/step | drafts 2, accepted 0.50/step (1.33 tokens/step) | mtp 2.9 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.48s (5.40 tok/s) | 6 steps, mean step 242.0 ms (min 138.2, max 446.7) | gpu-active 240.7 ms | io wait 37.0 ms (set 0.6, read 89.8) | sync fetches/step 60.8 + lookahead 169.2 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 15.77 ms\n",
+      "output": "r2-repeat4-q4-miss2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.47,
+        "clock_start_ms": 12.5,
+        "prompt_tokens": 121,
+        "prefill_seconds": 8.77,
+        "pp_s": 13.8,
+        "output_tokens": 8,
+        "decode_seconds": 1.48,
+        "tg_s": 5.4,
+        "steps": 6,
+        "mean_step_ms": 242.0,
+        "gpu_active_ms": 240.7,
+        "io_wait_ms": 37.0,
+        "metal_gb": 20.98,
+        "clock_end_ms": 15.77,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.5
+      }
+    },
+    {
+      "id": "r2-repeat4-q4-miss2-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "4",
+      "wall_seconds": 12.448600625000012,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.45s, clock probe 12.99 ms\nprefill engine: 1 chunk(s) of up to 4096, 9530 expert records streamed (26.4 GB, 218 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 0.9, attention blocks 0.3, expert streams 8.5, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 121 tokens in 10.13s (11.9 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 94.3 ms/step | drafts 2, accepted 0.33/step (1.33 tokens/step) | mtp 1.5 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.50s (5.34 tok/s) | 6 steps, mean step 245.6 ms (min 135.4, max 463.0) | gpu-active 244.3 ms | io wait 38.1 ms (set 0.7, read 92.8) | sync fetches/step 62.7 + lookahead 171.3 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 15.48 ms\n",
+      "output": "r2-repeat4-q4-miss2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 12.99,
+        "prompt_tokens": 121,
+        "prefill_seconds": 10.13,
+        "pp_s": 11.9,
+        "output_tokens": 8,
+        "decode_seconds": 1.5,
+        "tg_s": 5.34,
+        "steps": 6,
+        "mean_step_ms": 245.6,
+        "gpu_active_ms": 244.3,
+        "io_wait_ms": 38.1,
+        "metal_gb": 20.98,
+        "clock_end_ms": 15.48,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.33
+      }
+    },
+    {
+      "id": "r2-repeat20-q4-miss2-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "20",
+      "wall_seconds": 14.905897500000009,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.45s, clock probe 13.47 ms\nprefill engine: 1 chunk(s) of up to 4096, 13988 expert records streamed (29.1 GB, 56 MB/token), 0.0s waiting for ring reuse | GPU s: DeltaNet blocks 1.6, attention blocks 0.5, expert streams 9.6, MTP 0.2 | n-gram gather 0.0s CPU\nprefill 521 tokens in 12.09s (43.1 tok/s) [engine]\n  dispatches/step 2180 | cpu turnaround 151.2 ms/step | drafts 2, accepted 0.50/step (1.33 tokens/step) | mtp 4.3 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.99s (4.02 tok/s) | 6 steps, mean step 325.2 ms (min 173.3, max 581.8) | gpu-active 323.9 ms | io wait 44.9 ms (set 0.9, read 149.4) | sync fetches/step 74.8 + lookahead 256.0 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 19.84 ms\n",
+      "output": "r2-repeat20-q4-miss2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 13.47,
+        "prompt_tokens": 521,
+        "prefill_seconds": 12.09,
+        "pp_s": 43.1,
+        "output_tokens": 8,
+        "decode_seconds": 1.99,
+        "tg_s": 4.02,
+        "steps": 6,
+        "mean_step_ms": 325.2,
+        "gpu_active_ms": 323.9,
+        "io_wait_ms": 44.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 19.84,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.5
+      }
+    },
+    {
+      "id": "r2-repeat20-q4-miss2-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "20",
+      "wall_seconds": 18.06019112499999,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.45s, clock probe 12.81 ms\nprefill engine: 1 chunk(s) of up to 4096, 13857 expert records streamed (38.4 GB, 74 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 1.9, attention blocks 0.5, expert streams 12.5, MTP 0.3 | n-gram gather 0.0s CPU\nprefill 521 tokens in 15.38s (33.9 tok/s) [engine]\n  dispatches/step 2211 | cpu turnaround 176.8 ms/step | drafts 2, accepted 0.60/step (1.60 tokens/step) | mtp 3.7 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.86s (4.29 tok/s) | 5 steps, mean step 366.6 ms (min 241.4, max 574.8) | gpu-active 365.2 ms | io wait 52.5 ms (set 1.1, read 174.7) | sync fetches/step 84.2 + lookahead 286.8 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 18.02 ms\n",
+      "output": "r2-repeat20-q4-miss2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 12.81,
+        "prompt_tokens": 521,
+        "prefill_seconds": 15.38,
+        "pp_s": 33.9,
+        "output_tokens": 8,
+        "decode_seconds": 1.86,
+        "tg_s": 4.29,
+        "steps": 5,
+        "mean_step_ms": 366.6,
+        "gpu_active_ms": 365.2,
+        "io_wait_ms": 52.5,
+        "metal_gb": 20.98,
+        "clock_end_ms": 18.02,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.6
+      }
+    },
+    {
+      "id": "r2-repeat128-q4-miss2-after",
+      "round": 2,
+      "binary": "after",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "128",
+      "wall_seconds": 29.053667666999985,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.45s, clock probe 13.51 ms\nprefill engine: 1 chunk(s) of up to 4096, 17457 expert records streamed (34.5 GB, 11 MB/token), 0.4s waiting for ring reuse | GPU s: DeltaNet blocks 9.8, attention blocks 3.4, expert streams 12.1, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 26.30s (122.5 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 209.7 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 3.8 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 1.91s (4.19 tok/s) | 5 steps, mean step 376.2 ms (min 209.8, max 688.3) | gpu-active 374.6 ms | io wait 54.3 ms (set 1.1, read 207.6) | sync fetches/step 92.8 + lookahead 319.2 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 19.05 ms\n",
+      "output": "r2-repeat128-q4-miss2-after.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.45,
+        "clock_start_ms": 13.51,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 26.3,
+        "pp_s": 122.5,
+        "output_tokens": 8,
+        "decode_seconds": 1.91,
+        "tg_s": 4.19,
+        "steps": 5,
+        "mean_step_ms": 376.2,
+        "gpu_active_ms": 374.6,
+        "io_wait_ms": 54.3,
+        "metal_gb": 20.98,
+        "clock_end_ms": 19.05,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    },
+    {
+      "id": "r2-repeat128-q4-miss2-before",
+      "round": 2,
+      "binary": "before",
+      "bits": 4,
+      "miss_bits": 2,
+      "prompt": "128",
+      "wall_seconds": 32.795835124999996,
+      "power_before": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "power_after": {
+        "source": "ac",
+        "detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=34865251)\t100%; charged; 0:00 remaining present: true"
+      },
+      "exit_code": 0,
+      "stderr": "2-bit store (/path/to/model/packed/experts2.bin): 1540096 bytes per record, 56% of 4-bit, for synchronous misses\ncherenkov gpu: max_ctx 8192, 20.98 GB Metal (expert pool 17.2 GB = 6208 records, working-set limit 26.80 GB), load 0.48s, clock probe 12.67 ms\nprefill engine: 1 chunk(s) of up to 4096, 17436 expert records streamed (48.3 GB, 15 MB/token), 0.0s waiting on fetches | GPU s: DeltaNet blocks 9.8, attention blocks 3.4, expert streams 15.6, MTP 0.5 | n-gram gather 0.0s CPU\nprefill 3221 tokens in 29.90s (107.7 tok/s) [engine]\n  dispatches/step 2219 | cpu turnaround 212.6 ms/step | drafts 2, accepted 0.80/step (1.60 tokens/step) | mtp 5.8 ms/step | n-gram gather 0.2 ms/step\ndecode 8 tokens in 2.03s (3.94 tok/s) | 5 steps, mean step 399.5 ms (min 219.3, max 694.6) | gpu-active 398.0 ms | io wait 60.9 ms (set 1.1, read 210.6) | sync fetches/step 96.6 + lookahead 326.0 (warm 0.0, cut 0.0) | pool 6208/6208 | 20.98 GB Metal\nclock probe at end 17.13 ms\n",
+      "output": "r2-repeat128-q4-miss2-before.txt",
+      "valid": true,
+      "metrics": {
+        "store_build_seconds": null,
+        "load_seconds": 0.48,
+        "clock_start_ms": 12.67,
+        "prompt_tokens": 3221,
+        "prefill_seconds": 29.9,
+        "pp_s": 107.7,
+        "output_tokens": 8,
+        "decode_seconds": 2.03,
+        "tg_s": 3.94,
+        "steps": 5,
+        "mean_step_ms": 399.5,
+        "gpu_active_ms": 398.0,
+        "io_wait_ms": 60.9,
+        "metal_gb": 20.98,
+        "clock_end_ms": 17.13,
+        "drafts": 2,
+        "accepted_drafts_per_step": 0.8
+      }
+    }
+  ],
+  "binary_source_report": "../prefill-lowbit-2026-09-09/report.json"
+}

@@ -1,0 +1,319 @@
+# LRU Cache Implementation
+
+## Design Explanation
+
+**Core Data Structures:**
+- **Doubly Linked List (DLL)**: Maintains recency order. Most recently used item is at the head; least recently used is at the tail.
+- **Hash Map (dict)**: Maps keys to their corresponding DLL nodes for O(1) lookup.
+
+**Invariants:**
+1. The DLL always contains exactly the keys currently in the cache, ordered by recency (head = most recent, tail = least recent).
+2. The hash map contains exactly the same keys as the DLL nodes.
+3. On `get(key)`, if the key exists, its node is moved to the head (marking it as most recently used).
+4. On `put(key, value)`, if the key exists, its value is updated and its node is moved to the head. If the key doesn't exist, a new node is created, added to the head, and if capacity is exceeded, the tail node is evicted.
+5. The cache never exceeds `capacity` items.
+
+**Why O(1)?**
+- `get`: Hash lookup O(1) + DLL node move to head O(1) (via pointer relinking).
+- `put`: Hash lookup O(1) + DLL insert at head O(1) + potential eviction (remove tail) O(1).
+
+## Complete Implementation
+
+```python
+class Node:
+    """Doubly linked list node storing key-value pairs."""
+    __slots__ = ('key', 'value', 'prev', 'next')
+
+    def __init__(self, key, value):
+        self.key = key
+        self.value = value
+        self.prev = None
+        self.next = None
+
+
+class LRUCache:
+    """
+    LRU Cache with O(1) get and put operations.
+    
+    Invariants:
+    - The doubly linked list contains exactly the keys in the cache,
+      ordered by recency (head = most recently used, tail = least recently used).
+    - The hash map contains exactly the same keys as the DLL nodes.
+    - The cache never exceeds `capacity` items.
+    """
+
+    def __init__(self, capacity: int):
+        if capacity <= 0:
+            raise ValueError("Capacity must be a positive integer")
+        self.capacity = capacity
+        self.cache = {}  # key -> Node
+        # Dummy head and tail to simplify edge cases
+        self.head = Node(0, 0)  # dummy head (most recent side)
+        self.tail = Node(0, 0)  # dummy tail (least recent side)
+        self.head.next = self.tail
+        self.tail.prev = self.head
+
+    def _remove(self, node: Node) -> None:
+        """Remove node from the DLL."""
+        node.prev.next = node.next
+        node.next.prev = node.prev
+
+    def _add_to_head(self, node: Node) -> None:
+        """Add node to the head of the DLL (most recently used)."""
+        node.next = self.head.next
+        node.prev = self.head
+        self.head.next = node
+        node.next.prev = node
+
+    def _move_to_head(self, node: Node) -> None:
+        """Move existing node to the head (mark as most recently used)."""
+        self._remove(node)
+        self._add_to_head(node)
+
+    def get(self, key: int) -> int:
+        """
+        Get the value for the given key.
+        Returns -1 if the key is not present.
+        """
+        if key not in self.cache:
+            return -1
+        node = self.cache[key]
+        self._move_to_head(node)
+        return node.value
+
+    def put(self, key: int, value: int) -> None:
+        """
+        Insert or update the key-value pair.
+        If the cache exceeds capacity, evict the least recently used item.
+        """
+        if key in self.cache:
+            node = self.cache[key]
+            node.value = value
+            self._move_to_head(node)
+        else:
+            new_node = Node(key, value)
+            self.cache[key] = new_node
+            self._add_to_head(new_node)
+            if len(self.cache) > self.capacity:
+                # Evict the least recently used item (tail)
+                lru = self.tail.prev
+                self._remove(lru)
+                del self.cache[lru.key]
+
+    def __repr__(self) -> str:
+        """Helper for debugging: show cache contents in recency order."""
+        items = []
+        current = self.head.next
+        while current is not self.tail:
+            items.append(f"{current.key}: {current.value}")
+            current = current.next
+        return "LRUCache({" + ", ".join(items) + "})"
+
+
+# =============================================================================
+# Tests
+# =============================================================================
+
+def test_basic_get_put():
+    """Test basic get and put operations."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    assert cache.get(1) == 1, "Should return value for key 1"
+    assert cache.get(2) == 2, "Should return value for key 2"
+    assert cache.get(3) == -1, "Should return -1 for missing key"
+
+
+def test_update_existing_key():
+    """Test that updating an existing key works correctly."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.put(1, 3)  # Update key 1
+    assert cache.get(1) == 3, "Updated value should be returned"
+    assert cache.get(2) == 2, "Key 2 should still be present"
+
+
+def test_eviction_order():
+    """Test that eviction removes the least recently used item."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    # Access key 1 to make it most recently used
+    cache.get(1)
+    # Now key 2 is least recently used
+    cache.put(3, 3)  # Should evict key 2
+    assert cache.get(2) == -1, "Key 2 should have been evicted"
+    assert cache.get(1) == 1, "Key 1 should still be present"
+    assert cache.get(3) == 3, "Key 3 should be present"
+
+
+def test_eviction_after_update():
+    """Test eviction when updating an existing key doesn't change recency incorrectly."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.put(1, 3)  # Update key 1, moves it to head
+    cache.put(3, 3)  # Should evict key 2 (least recently used)
+    assert cache.get(2) == -1, "Key 2 should have been evicted"
+    assert cache.get(1) == 3, "Key 1 should still be present with updated value"
+    assert cache.get(3) == 3, "Key 3 should be present"
+
+
+def test_capacity_one():
+    """Test cache with capacity 1."""
+    cache = LRUCache(1)
+    cache.put(1, 1)
+    cache.put(2, 2)  # Should evict key 1
+    assert cache.get(1) == -1, "Key 1 should have been evicted"
+    assert cache.get(2) == 2, "Key 2 should be present"
+
+
+def test_multiple_evictions():
+    """Test multiple sequential evictions."""
+    cache = LRUCache(3)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.put(3, 3)
+    cache.put(4, 4)  # Evicts key 1
+    assert cache.get(1) == -1, "Key 1 should have been evicted"
+    cache.put(5, 5)  # Evicts key 2
+    assert cache.get(2) == -1, "Key 2 should have been evicted"
+    assert cache.get(3) == 3, "Key 3 should still be present"
+    assert cache.get(4) == 4, "Key 4 should be present"
+    assert cache.get(5) == 5, "Key 5 should be present"
+
+
+def test_get_moves_to_head():
+    """Test that get() moves the accessed item to the head."""
+    cache = LRUCache(2)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.get(1)  # Move key 1 to head
+    cache.put(3, 3)  # Should evict key 2 (least recently used)
+    assert cache.get(2) == -1, "Key 2 should have been evicted"
+    assert cache.get(1) == 1, "Key 1 should still be present"
+
+
+def test_invalid_capacity():
+    """Test that non-positive capacity raises ValueError."""
+    try:
+        LRUCache(0)
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+    try:
+        LRUCache(-1)
+        assert False, "Should have raised ValueError"
+    except ValueError:
+        pass
+
+
+def test_large_sequence():
+    """Test a longer sequence of operations."""
+    cache = LRUCache(3)
+    cache.put(1, 1)
+    cache.put(2, 2)
+    cache.put(3, 3)
+    cache.put(4, 4)  # Evicts 1
+    cache.put(5, 5)  # Evicts 2
+    cache.put(6, 6)  # Evicts 3
+    cache.put(7, 7)  # Evicts 4
+    cache.put(8, 8)  # Evicts 5
+    cache.put(9, 9)  # Evicts 6
+    cache.put(10, 10)  # Evicts 7
+    cache.put(11, 11)  # Evicts 8
+    cache.put(12, 12)  # Evicts 9
+    cache.put(13, 13)  # Evicts 10
+    cache.put(14, 14)  # Evicts 11
+    cache.put(15, 15)  # Evicts 12
+    cache.put(16, 16)  # Evicts 13
+    cache.put(17, 17)  # Evicts 14
+    cache.put(18, 18)  # Evicts 15
+    cache.put(19, 19)  # Evicts 16
+    cache.put(20, 20)  # Evicts 17
+    cache.put(21, 21)  # Evicts 18
+    cache.put(22, 22)  # Evicts 19
+    cache.put(23, 23)  # Evicts 20
+    cache.put(24, 24)  # Evicts 21
+    cache.put(25, 25)  # Evicts 22
+    cache.put(26, 26)  # Evicts 23
+    cache.put(27, 27)  # Evicts 24
+    cache.put(28, 28)  # Evicts 25
+    cache.put(29, 29)  # Evicts 26
+    cache.put(30, 30)  # Evicts 27
+    cache.put(31, 31)  # Evicts 28
+    cache.put(32, 32)  # Evicts 29
+    cache.put(33, 33)  # Evicts 30
+    cache.put(34, 34)  # Evicts 31
+    cache.put(35, 35)  # Evicts 32
+    cache.put(36, 36)  # Evicts 33
+    cache.put(37, 37)  # Evicts 34
+    cache.put(38, 38)  # Evicts 35
+    cache.put(39, 39)  # Evicts 36
+    cache.put(40, 40)  # Evicts 37
+    cache.put(41, 41)  # Evicts 38
+    cache.put(42, 42)  # Evicts 39
+    cache.put(43, 43)  # Evicts 40
+    cache.put(44, 44)  # Evicts 41
+    cache.put(45, 45)  # Evicts 42
+    cache.put(46, 46)  # Evicts 43
+    cache.put(47, 47)  # Evicts 44
+    cache.put(48, 48)  # Evicts 45
+    cache.put(49, 49)  # Evicts 46
+    cache.put(50, 50)  # Evicts 47
+    cache.put(51, 51)  # Evicts 48
+    cache.put(52, 52)  # Evicts 49
+    cache.put(53, 53)  # Evicts 50
+    cache.put(54, 54)  # Evicts 51
+    cache.put(55, 55)  # Evicts 52
+    cache.put(56, 56)  # Evicts 53
+    cache.put(57, 57)  # Evicts 54
+    cache.put(58, 58)  # Evicts 55
+    cache.put(59, 59)  # Evicts 56
+    cache.put(60, 60)  # Evicts 57
+    cache.put(61, 61)  # Evicts 58
+    cache.put(62, 62)  # Evicts 59
+    cache.put(63, 63)  # Evicts 60
+    cache.put(64, 64)  # Evicts 61
+    cache.put(65, 65)  # Evicts 62
+    cache.put(66, 66)  # Evicts 63
+    cache.put(67, 67)  # Evicts 64
+    cache.put(68, 68)  # Evicts 65
+    cache.put(69, 69)  # Evicts 66
+    cache.put(70, 70)  # Evicts 67
+    cache.put(71, 71)  # Evicts 68
+    cache.put(72, 72)  # Evicts 69
+    cache.put(73, 73)  # Evicts 70
+    cache.put(74, 74)  # Evicts 71
+    cache.put(75, 75)  # Evicts 72
+    cache.put(76, 76)  # Evicts 73
+    cache.put(77, 77)  # Evicts 74
+    cache.put(78, 78)  # Evicts 75
+    cache.put(79, 79)  # Evicts 76
+    cache.put(80, 80)  # Evicts 77
+    cache.put(81, 81)  # Evicts 78
+    cache.put(82, 82)  # Evicts 79
+    cache.put(83, 83)  # Evicts 80
+    cache.put(84, 84)  # Evicts 81
+    cache.put(85, 85)  # Evicts 82
+    cache.put(86, 86)  # Evicts 83
+    cache.put(87, 87)  # Evicts 84
+    cache.put(88, 88)  # Evicts 85
+    cache.put(89, 89)  # Evicts 86
+    cache.put(90, 90)  # Evicts 87
+    cache.put(91, 91)  # Evicts 88
+    cache.put(92, 92)  # Evicts 89
+    cache.put(93, 93)  # Evicts 90
+    cache.put(94, 94)  # Evicts 91
+    cache.put(95, 95)  # Evicts 92
+    cache.put(96, 96)  # Evicts 93
+    cache.put(97, 97)  # Evicts 94
+    cache.put(98, 98)  # Evicts 95
+    cache.put(99, 99)  # Evicts 96
+    cache.put(100, 100)  # Evicts 97
+    # At this point, cache should contain keys 98, 99, 100
+    assert cache.get(97) == -1, "Key 97 should have been evicted"
+    assert cache.get(98) == 98, "Key 98 should be present"
+    assert cache.get(99) == 99, "Key 99 should be present"
+    assert cache.get(100

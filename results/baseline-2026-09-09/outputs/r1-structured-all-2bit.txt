@@ -1,0 +1,53 @@
+```json
+[
+  {
+    "order_id": "A17",
+    "customer": "Mira",
+    "items": [
+      {
+        "name": "notebooks",
+        "quantity": 3,
+        "unit_price_usd": 4.50
+      },
+      {
+        "name": "pens",
+        "quantity": 2,
+        "unit_price_usd": 1.25
+      }
+    ],
+    "shipping_usd": 0.00,
+    "total_usd": 16.00
+  },
+  {
+    "order_id": "B08",
+    "customer": "Jules",
+    "items": [
+      {
+        "name": "desk lamp",
+        "quantity": 1,
+        "unit_price_usd": 27.90
+      },
+      {
+        "name": "bulbs",
+        "quantity": 4,
+        "unit_price_usd": 3.10
+      }
+    ],
+    "shipping_usd": 5.00,
+    "total_usd": 46.30
+  },
+  {
+    "order_id": "C31",
+    "customer": "Sana",
+    "items": [
+      {
+        "name": "mugs",
+        "quantity": 1,
+        "unit_price_usd": 12.00
+      }
+    ],
+    "shipping_usd": 2.50,
+    "total_usd": 14.50
+  }
+]
+```

@@ -1,0 +1,29 @@
+```python
+class ListNode:
+    """Definition for singly-linked list node."""
+    def __init__(self, val=0, next=None):
+        self.val = val
+        self.next = next
+
+
+def reverse_linked_list(head: ListNode) -> ListNode:
+    """
+    Reverses a singly linked list and returns the new head.
+    
+    Args:
+        head: The head node of the singly linked list.
+        
+    Returns:
+        The new head node of the reversed linked list.
+    """
+    prev = None
+    current = head
+    
+    while current:
+        next_node = current.next  # Store the next node
+        current.next = prev       # Reverse the link
+        prev = current            # Move prev forward
+        current = next_node       # Move current forward
+    
+    return prev  # prev is now the new head
+```

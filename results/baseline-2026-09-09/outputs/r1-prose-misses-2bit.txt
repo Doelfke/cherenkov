@@ -1,0 +1,52 @@
+### Why Hash Tables Need to Handle Collisions
+
+To understand why collisions must be handled, we must first look at the fundamental mechanism of a hash table.
+
+#### 1. The Core Problem: Mapping Infinite to Finite
+A hash table works by using a **hash function** to map keys (data) to specific indices (slots) in an array (the bucket array).
+
+*   **The Domain (Keys):** The set of possible keys is usually infinite or vastly larger than the array size (e.g., all possible strings, integers, or objects).
+*   **The Codomain (Indices):** The array has a fixed, finite size (e.g., 100 slots).
+
+**The Pigeonhole Principle:**
+If you try to put $N$ items into $M$ boxes where $N > M$, at least one box must contain more than one item. Since the number of possible keys is almost always greater than the number of array slots, **collisions are mathematically inevitable.**
+
+#### 2. What Happens Without Collision Handling?
+If a hash table did not have a strategy to handle collisions (such as chaining or open addressing), two different keys that hash to the same index would overwrite each other.
+*   **Data Loss:** One value would be permanently lost.
+*   **Data Corruption:** Retrieving one key might return the value associated with the other key.
+
+---
+
+### Short Example
+
+Imagine a hash table with an array size of **2** (Indices: `0` and `1`).
+
+**The Hash Function:**
+$$ \text{hash}(key) = \text{length}(key) \pmod 2 $$
+
+**Step 1: Insert "Apple"**
+*   Key: `"Apple"`
+*   Length: 5
+*   Calculation: $5 \pmod 2 = 1$
+*   **Action:** Store `"Apple"` at Index `1`.
+
+**Step 2: Insert "Banana"**
+*   Key: `"Banana"`
+*   Length: 6
+*   Calculation: $6 \pmod 2 = 0$
+*   **Action:** Store `"Banana"` at Index `0`.
+
+**Step 3: Insert "Cherry" (The Collision)**
+*   Key: `"Cherry"`
+*   Length: 6
+*   Calculation: $6 \pmod 2 = 0$
+*   **Result:** Index `0` is already occupied by `"Banana"`.
+
+**The Necessity of Handling:**
+If the system does not handle this collision, inserting `"Cherry"` will overwrite `"Banana"`.
+*   If you later search for `"Banana"`, the system will return the data for `"Cherry"` (or fail to find `"Banana"` entirely).
+*   **Solution:** The hash table must use a technique (like **Chaining**, where Index `0` holds a linked list containing both `"Banana"` and `"Cherry"`) to ensure both keys remain accessible.
+
+### Conclusion
+Hash tables must handle collisions because **multiple distinct keys can mathematically map to the same array index**. Without collision resolution strategies (like separate chaining or linear probing), the data structure would suffer from data loss and incorrect retrieval.

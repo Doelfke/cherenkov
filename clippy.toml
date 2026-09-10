@@ -1,0 +1,3 @@
+# Keep control flow readable without fragmenting straight-line kernel dispatch.
+cognitive-complexity-threshold = 12
+excessive-nesting-threshold = 2

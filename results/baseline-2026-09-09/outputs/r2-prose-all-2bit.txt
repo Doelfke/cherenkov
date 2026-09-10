@@ -1,0 +1,28 @@
+### Why Hash Tables Need to Handle Collisions
+
+A hash table needs to handle collisions because **multiple distinct keys can map to the same index** in the underlying array.
+
+#### 1. The Core Problem
+A hash table uses a **hash function** to convert a key into an array index. However, the number of possible keys is usually much larger than the number of available array slots. This means that two different keys can produce the same hash value (and thus the same index).
+
+#### 2. Short Example
+Consider a hash table with **3 slots** (indices `0`, `1`, `2`) and a simple hash function:  
+`hash(key) = key % 3`
+
+| Key | Calculation | Hash Value (Index) |
+|-----|-------------|--------------------|
+| `"A"` | `65 % 3` | `2` |
+| `"B"` | `66 % 3` | `0` |
+| `"C"` | `67 % 3` | `1` |
+| `"D"` | `68 % 3` | **`2`** ← **Collision!** |
+
+- `"A"` and `"D"` both hash to index `2`.
+- If we don’t handle this collision, inserting `"D"` would **overwrite** `"A"` (or vice versa), causing data loss.
+
+#### 3. How Collisions Are Handled
+Common strategies include:
+- **Chaining**: Store a linked list (or other structure) at each array slot. Both `"A"` and `"D"` would live in the same bucket at index `2`.
+- **Open Addressing**: Probe for the next available slot (e.g., linear probing: if `2` is taken, try `0`, then `1`, etc.).
+
+#### 4. Why It’s Necessary
+Without collision handling, hash tables would **lose data** and **violate the key-value mapping guarantee**. Since collisions are **inevitable** (by the Pigeonhole Principle, if you have more keys than slots), every hash table implementation must include a collision resolution strategy.

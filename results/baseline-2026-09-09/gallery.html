@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+
+<title>Cherenkov benchmark</title>
+<style>
+  * { box-sizing:border-box }
+  html { scroll-behavior:smooth }
+  body { font:16px/1.5 system-ui; max-width:1200px; margin:40px auto;
+         padding:0 20px; background:#f5f4ef; color:#20252a }
+  a { color:#225b64; text-underline-offset:3px }
+  nav { display:flex; flex-wrap:wrap; gap:20px; margin:20px 0 }
+  section { margin:36px 0; scroll-margin-top:20px }
+  .cards { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+         gap:20px }
+  article { background:white; padding:20px; border:1px solid #ddd;
+            border-radius:12px }
+  img { width:100%; height:330px; object-fit:contain }
+  h1 { margin-bottom:8px; line-height:1.15 }
+  h2 { font-size:24px; margin-bottom:12px }
+  h3 { font-size:18px; margin-top:0 }
+  p[role=status] { padding:12px 16px; background:#e3ede6; border-radius:8px }
+  .note { color:#505b60; max-width:85ch }
+  .table-scroll { overflow-x:auto; margin:20px 0; background:white;
+                  border:1px solid #d7ddda; border-radius:10px }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums }
+  caption { text-align:left; padding:16px; font-weight:700; font-size:17px }
+  th, td { padding:12px 16px; border-top:1px solid #e4e8e5; text-align:right }
+  thead th { background:#edf1ee; vertical-align:bottom; font-size:13px; min-width:100px }
+  th:first-child, .label { text-align:left }
+  th[scope=row] { font-weight:500; min-width:190px }
+  td { white-space:nowrap }
+  tbody tr:nth-child(even) { background:#f8faf8 }
+  tbody tr:hover { background:#eff5f3 }
+  .details-table { font-size:14px }
+  .details-table th, .details-table td { padding:10px }
+  .details-table thead th { min-width:70px }
+  .details-table .label { white-space:normal; min-width:170px }
+  .scroll-hint { display:none; font-size:12px; font-weight:400; color:#505b60 }
+  summary { cursor:pointer; color:#225b64; padding:12px 0; font-weight:600 }
+  @media(max-width:700px) {
+    body { margin:24px auto; padding:0 12px }
+    th, td { padding:10px 12px }
+    .cards { grid-template-columns:1fr }
+    .scroll-hint { display:block }
+  }
+</style>
+<h1>Cherenkov benchmark</h1>
+<p>Complete answers and unedited pelican drawings across four expert settings.</p>
+<nav aria-label="Report sections"><a href="#timings">Timings</a>
+<a href="#pelicans">Pelicans</a><a href="summary.md">Markdown report</a>
+<a href="report.json">Raw data (JSON)</a></nav>
+<p role="status">80 of 80 samples valid; 4 of 4 drawings available.</p>
+<main>
+<section id="timings"><h2>Timings</h2>
+<p class="note">TG/s is generated tokens per second; PP/s is prompt tokens per second.
+Tables show medians of complete, valid runs. Loading and conversion are excluded
+from both rates. Answers differ in length and content across settings.</p>
+<div class="table-scroll" tabindex="0"><table><caption>Generation · tokens/s<span class="scroll-hint">Scroll sideways for all settings</span></caption><thead><tr><th scope="col">Workload</th><th scope="col" title="4-bit">4-bit</th><th scope="col" title="4-bit resident / 2-bit misses + cut 0.08">4/2-bit + cut</th><th scope="col" title="3-bit">3-bit</th><th scope="col" title="2-bit">2-bit</th></tr></thead><tbody><tr><th scope="row">Linked-list code</th><td>8.52</td><td>8.29</td><td>12.13</td><td>17.38</td></tr><tr><th scope="row">LRU cache</th><td>7.07</td><td>8.03</td><td>10.72</td><td>15.23</td></tr><tr><th scope="row">Binary-search debugging</th><td>7.06</td><td>7.96</td><td>10.27</td><td>13.54</td></tr><tr><th scope="row">Hash-table explanation</th><td>7.71</td><td>8.92</td><td>9.83</td><td>11.73</td></tr><tr><th scope="row">Scheduling arithmetic</th><td>6.77</td><td>8.05</td><td>10.86</td><td>13.00</td></tr><tr><th scope="row">JSON extraction</th><td>7.88</td><td>9.33</td><td>12.67</td><td>20.17</td></tr></tbody></table></div>
+<div class="table-scroll" tabindex="0"><table><caption>Prompt processing · tokens/s<span class="scroll-hint">Scroll sideways for all settings</span></caption><thead><tr><th scope="col">Workload</th><th scope="col" title="4-bit">4-bit</th><th scope="col" title="4-bit resident / 2-bit misses + cut 0.08">4/2-bit + cut</th><th scope="col" title="3-bit">3-bit</th><th scope="col" title="2-bit">2-bit</th></tr></thead><tbody><tr><th scope="row">Long document</th><td>83.20</td><td>77.80</td><td>75.80</td><td>78.90</td></tr></tbody></table></div>
+<details><summary>Full phase timings and answer lengths</summary><div class="table-scroll" tabindex="0"><table class="details-table"><caption>Per-workload medians; Metal memory is the maximum reported allocation.</caption><thead><tr><th scope="col">Workload</th><th scope="col">Configuration</th><th scope="col">Runs</th><th scope="col">Prompt tokens</th><th scope="col">Prefill s</th><th scope="col">PP/s</th><th scope="col">Output tokens</th><th scope="col">Decode s</th><th scope="col">TG/s</th><th scope="col">Load s</th><th scope="col">Metal GB</th></tr></thead><tbody><tr><th scope="row">Linked-list code</th><td class="label">4-bit</td><td>3</td><td>24</td><td>4.63</td><td>5.20</td><td>187</td><td>21.94</td><td>8.52</td><td>0.57</td><td>20.98</td></tr><tr><th scope="row">Linked-list code</th><td class="label">4-bit resident / 2-bit misses + cut 0.08</td><td>3</td><td>24</td><td>4.45</td><td>5.40</td><td>557</td><td>69.54</td><td>8.29</td><td>0.60</td><td>20.98</td></tr><tr><th scope="row">Linked-list code</th><td class="label">3-bit</td><td>3</td><td>24</td><td>3.85</td><td>6.20</td><td>185</td><td>15.26</td><td>12.13</td><td>0.49</td><td>20.98</td></tr><tr><th scope="row">Linked-list code</th><td class="label">2-bit</td><td>3</td><td>24</td><td>2.89</td><td>8.30</td><td>867</td><td>49.90</td><td>17.38</td><td>0.49</td><td>20.98</td></tr><tr><th scope="row">LRU cache</th><td class="label">4-bit</td><td>3</td><td>59</td><td>8.72</td><td>6.80</td><td>2,124</td><td>300.48</td><td>7.07</td><td>0.58</td><td>20.98</td></tr><tr><th scope="row">LRU cache</th><td class="label">4-bit resident / 2-bit misses + cut 0.08</td><td>3</td><td>59</td><td>8.12</td><td>7.30</td><td>1,796</td><td>223.73</td><td>8.03</td><td>0.48</td><td>20.98</td></tr><tr><th scope="row">LRU cache</th><td class="label">3-bit</td><td>3</td><td>59</td><td>6.99</td><td>8.40</td><td>2,314</td><td>215.91</td><td>10.72</td><td>0.51</td><td>20.98</td></tr><tr><th scope="row">LRU cache</th><td class="label">2-bit</td><td>3</td><td>59</td><td>5.38</td><td>11.00</td><td>4,408</td><td>289.38</td><td>15.23</td><td>0.49</td><td>20.98</td></tr><tr><th scope="row">Binary-search debugging</th><td class="label">4-bit</td><td>3</td><td>139</td><td>12.15</td><td>11.40</td><td>1,773</td><td>250.96</td><td>7.06</td><td>0.54</td><td>20.98</td></tr><tr><th scope="row">Binary-search debugging</th><td class="label">4-bit resident / 2-bit misses + cut 0.08</td><td>3</td><td>139</td><td>12.22</td><td>11.40</td><td>1,903</td><td>237.68</td><td>7.96</td><td>0.52</td><td>20.98</td></tr><tr><th scope="row">Binary-search debugging</th><td class="label">3-bit</td><td>3</td><td>139</td><td>15.75</td><td>8.80</td><td>1,865</td><td>181.64</td><td>10.27</td><td>0.53</td><td>20.98</td></tr><tr><th scope="row">Binary-search debugging</th><td class="label">2-bit</td><td>3</td><td>139</td><td>14.93</td><td>9.30</td><td>1,771</td><td>130.84</td><td>13.54</td><td>0.63</td><td>20.98</td></tr><tr><th scope="row">Hash-table explanation</th><td class="label">4-bit</td><td>3</td><td>28</td><td>5.55</td><td>5.00</td><td>692</td><td>89.78</td><td>7.71</td><td>0.57</td><td>20.98</td></tr><tr><th scope="row">Hash-table explanation</th><td class="label">4-bit resident / 2-bit misses + cut 0.08</td><td>3</td><td>28</td><td>5.14</td><td>5.40</td><td>691</td><td>77.69</td><td>8.92</td><td>0.47</td><td>20.98</td></tr><tr><th scope="row">Hash-table explanation</th><td class="label">3-bit</td><td>3</td><td>28</td><td>4.65</td><td>6.00</td><td>461</td><td>46.88</td><td>9.83</td><td>0.47</td><td>20.98</td></tr><tr><th scope="row">Hash-table explanation</th><td class="label">2-bit</td><td>3</td><td>28</td><td>3.45</td><td>8.10</td><td>447</td><td>38.10</td><td>11.73</td><td>0.57</td><td>20.98</td></tr><tr><th scope="row">Scheduling arithmetic</th><td class="label">4-bit</td><td>3</td><td>111</td><td>10.22</td><td>10.90</td><td>4,033</td><td>595.92</td><td>6.77</td><td>0.57</td><td>20.98</td></tr><tr><th scope="row">Scheduling arithmetic</th><td class="label">4-bit resident / 2-bit misses + cut 0.08</td><td>3</td><td>111</td><td>10.34</td><td>10.70</td><td>2,264</td><td>281.12</td><td>8.05</td><td>0.51</td><td>20.98</td></tr><tr><th scope="row">Scheduling arithmetic</th><td class="label">3-bit</td><td>3</td><td>111</td><td>13.79</td><td>8.00</td><td>2,172</td><td>200.02</td><td>10.86</td><td>0.53</td><td>20.98</td></tr><tr><th scope="row">Scheduling arithmetic</th><td class="label">2-bit</td><td>3</td><td>111</td><td>12.84</td><td>8.60</td><td>2,487</td><td>191.30</td><td>13.00</td><td>0.67</td><td>20.98</td></tr><tr><th scope="row">JSON extraction</th><td class="label">4-bit</td><td>3</td><td>173</td><td>12.68</td><td>13.60</td><td>372</td><td>47.18</td><td>7.88</td><td>0.57</td><td>20.98</td></tr><tr><th scope="row">JSON extraction</th><td class="label">4-bit resident / 2-bit misses + cut 0.08</td><td>3</td><td>173</td><td>12.56</td><td>13.80</td><td>372</td><td>39.86</td><td>9.33</td><td>0.47</td><td>20.98</td></tr><tr><th scope="row">JSON extraction</th><td class="label">3-bit</td><td>3</td><td>173</td><td>15.60</td><td>11.10</td><td>372</td><td>29.36</td><td>12.67</td><td>0.47</td><td>20.98</td></tr><tr><th scope="row">JSON extraction</th><td class="label">2-bit</td><td>3</td><td>173</td><td>15.30</td><td>11.30</td><td>372</td><td>18.45</td><td>20.17</td><td>0.51</td><td>20.98</td></tr><tr><th scope="row">Long document</th><td class="label">4-bit</td><td>1</td><td>3,221</td><td>38.71</td><td>83.20</td><td>48</td><td>8.59</td><td>5.59</td><td>0.54</td><td>20.98</td></tr><tr><th scope="row">Long document</th><td class="label">4-bit resident / 2-bit misses + cut 0.08</td><td>1</td><td>3,221</td><td>41.42</td><td>77.80</td><td>44</td><td>6.35</td><td>6.93</td><td>0.52</td><td>20.98</td></tr><tr><th scope="row">Long document</th><td class="label">3-bit</td><td>1</td><td>3,221</td><td>42.52</td><td>75.80</td><td>48</td><td>7.27</td><td>6.60</td><td>0.62</td><td>20.98</td></tr><tr><th scope="row">Long document</th><td class="label">2-bit</td><td>1</td><td>3,221</td><td>40.83</td><td>78.90</td><td>51</td><td>6.66</td><td>7.66</td><td>0.58</td><td>20.98</td></tr><tr><th scope="row">Pelican SVG</th><td class="label">4-bit</td><td>1</td><td>36</td><td>6.85</td><td>5.30</td><td>1,685</td><td>224.85</td><td>7.49</td><td>0.44</td><td>20.98</td></tr><tr><th scope="row">Pelican SVG</th><td class="label">4-bit resident / 2-bit misses + cut 0.08</td><td>1</td><td>36</td><td>6.24</td><td>5.80</td><td>2,156</td><td>252.68</td><td>8.53</td><td>0.47</td><td>20.98</td></tr><tr><th scope="row">Pelican SVG</th><td class="label">3-bit</td><td>1</td><td>36</td><td>5.43</td><td>6.60</td><td>1,751</td><td>150.64</td><td>11.62</td><td>0.49</td><td>20.98</td></tr><tr><th scope="row">Pelican SVG</th><td class="label">2-bit</td><td>1</td><td>36</td><td>4.17</td><td>8.60</td><td>2,707</td><td>190.48</td><td>14.21</td><td>0.49</td><td>20.98</td></tr></tbody></table></div></details>
+<p class="note">Mixed 4/2-bit includes the timing-dependent deadline cut, so its
+output is not reproducible. Reported Metal memory excludes the transient prefill
+peak. See the full phase timings for sample counts and answer lengths.</p>
+</section>
+<section id="pelicans"><h2>Pelicans</h2>
+<p class="note">Same prompt, unedited model SVGs. Drawing rates are shown separately
+from the other workloads; generation seconds exclude loading and prefill.</p>
+<div class="cards">
+<article><h3>4-bit</h3><img src="pelicans/exact-4bit.svg" alt="Generated pelican riding a bicycle"><p>39 elements · 1,685 tokens</p><p><strong>7.49 tokens/s</strong> · 224.85 s generation</p><a href="outputs/r1-pelican-exact-4bit.txt">Full output</a></article>
+<article><h3>4-bit resident / 2-bit misses + cut 0.08</h3><img src="pelicans/misses-2bit.svg" alt="Generated pelican riding a bicycle"><p>46 elements · 2,156 tokens</p><p><strong>8.53 tokens/s</strong> · 252.68 s generation</p><a href="outputs/r1-pelican-misses-2bit.txt">Full output</a></article>
+<article><h3>3-bit</h3><img src="pelicans/all-3bit.svg" alt="Generated pelican riding a bicycle"><p>39 elements · 1,751 tokens</p><p><strong>11.62 tokens/s</strong> · 150.64 s generation</p><a href="outputs/r1-pelican-all-3bit.txt">Full output</a></article>
+<article><h3>2-bit</h3><img src="pelicans/all-2bit.svg" alt="Generated pelican riding a bicycle"><p>64 elements · 2,707 tokens</p><p><strong>14.21 tokens/s</strong> · 190.48 s generation</p><a href="outputs/r1-pelican-all-2bit.txt">Full output</a></article>
+</div></section></main></html>
