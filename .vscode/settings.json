@@ -1,0 +1,13 @@
+{
+  // A fragment alone is not a translation unit (src/kernels.rs assembles
+  // them), so metal-lsp's single-file compile on save cannot succeed here.
+  // Run the check-metal task instead; it compiles the assembled libraries
+  // and maps diagnostics back to the fragments. clangd itself is fed the
+  // assembled view through kernels/.clangd.
+  "metal-lsp.compileDiagnostics": "off",
+  // The only C-family file is kernels/clangd_prelude.h, which exists for
+  // clangd and includes metal-lsp's stub <metal_stdlib>. The Microsoft
+  // C/C++ extension cannot find that stub and flags the include, so its
+  // IntelliSense is off in this workspace.
+  "C_Cpp.intelliSenseEngine": "disabled"
+}

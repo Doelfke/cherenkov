@@ -46,6 +46,10 @@ run = "cargo test --workspace --release --offline -- --test-threads=1"
 description = "Syntax-check the assembled Metal libraries with the real compiler"
 run = "cargo xtask check-metal"
 
+[tasks.clangd]
+description = "Write kernels/.clangd so clangd sees each fragment as the assembler does"
+run = "cargo xtask clangd"
+
 [tasks.bench]
 description = "Run the benchmark suite and generate pelicans"
 run = "cargo xtask bench"

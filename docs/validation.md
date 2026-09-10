@@ -51,7 +51,8 @@ GPU tests require Apple Silicon and Metal. Real-weight tests also require
 when the model is absent; low-bit checks also skip missing Q2/Q3 stores.
 They verify attention, argmax, expert projections, prefill and complete
 hybrid-state checkpoint restoration against CPU or independent references.
-`check-metal` compiles the same assembled shader libraries as the engine.
+`check-metal` compiles the same assembled shader libraries as the engine and
+fails when `kernels/.clangd` is stale; `mise run clangd` regenerates it.
 
 Task-runner tests cover timing separation, SVG validation, cycle detection,
 resume rules, process cleanup, report generation and README updates.
