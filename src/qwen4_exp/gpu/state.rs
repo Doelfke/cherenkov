@@ -105,11 +105,15 @@ impl Gpu<'_> {
     }
 
     pub(crate) fn prefix_state_bytes(&self) -> usize {
-        self.prefix_regions(self.pos, self.mtp_len)
+        self.state_bytes_at(self.pos, self.mtp_len)
+    }
+
+    pub(crate) fn state_bytes_at(&self, pos: usize, mtp_len: usize) -> usize {
+        self.prefix_regions(pos, mtp_len)
             .iter()
             .map(|(_, _, n)| n + size_of::<Vec<u8>>())
             .sum::<usize>()
-            + self.pos * size_of::<u32>()
+            + pos * size_of::<u32>()
             + size_of::<PrefixState>()
     }
 
@@ -132,6 +136,31 @@ impl Gpu<'_> {
             tokens: self.tokens[..self.pos].to_vec(),
             data,
         }
+    }
+
+    /// Reuse suspended-request buffers; only initialized prefixes are copied.
+    pub(crate) fn save_into(&self, checkpoint: &mut Option<PrefixState>) {
+        let Some(state) = checkpoint else {
+            *checkpoint = Some(self.save_prefix());
+            return;
+        };
+        for ((buffer, offset, len), data) in self
+            .prefix_regions(self.pos, self.mtp_len)
+            .into_iter()
+            .zip(&mut state.data)
+        {
+            data.resize(len, 0);
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    buffer.contents().cast::<u8>().as_ptr().add(offset),
+                    data.as_mut_ptr(),
+                    len,
+                );
+            }
+        }
+        state.pos = self.pos;
+        state.mtp_len = self.mtp_len;
+        state.tokens.clone_from(&self.tokens);
     }
 
     pub(crate) fn restore_prefix(&mut self, state: &PrefixState) -> Result<()> {
@@ -170,6 +199,11 @@ impl Gpu<'_> {
     /// Weights and expert residency remain loaded; sequence state is independent.
     pub(crate) fn reset_request(&mut self) {
         self.reset();
+        self.clear_profile();
+    }
+
+    /// Server scheduling publishes counters each turn instead of retaining a log.
+    pub(crate) fn clear_profile(&mut self) {
         self.expert_history.clear();
         self.route_history.clear();
         self.state_history.clear();

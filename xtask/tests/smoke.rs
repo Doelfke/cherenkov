@@ -1,4 +1,6 @@
 //! Live checks are explicit: they need a packed model or network access.
+#[path = "smoke/concurrency.rs"]
+mod concurrency;
 mod support;
 
 use anyhow::Result;
@@ -18,7 +20,10 @@ fn server_smoke() -> Result<()> {
     let server = Server::start(900)?;
     let address = &server.address;
     check_discovery(address)?;
-    let mut messages = json!([{"role":"system","content":"You are a concise assistant. ".repeat(16)},{"role":"user","content":"What is the capital of France?"}]);
+    let mut messages = json!([
+        {"role": "system", "content": "You are a concise assistant. ".repeat(16)},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]);
     let first = std::thread::scope(|scope| -> Result<Value> {
         let pending = scope.spawn(|| chat(address, &messages));
         std::thread::sleep(Duration::from_millis(200));
@@ -150,7 +155,7 @@ fn check_stream(address: &str, messages: &Value) -> Result<()> {
 fn check_invalid_requests(address: &str, messages: &Value) -> Result<()> {
     for body in [
         json!({"messages":[]}),
-        json!({"messages":messages,"temperature":0.8}),
+        json!({"messages":messages,"temperature":-0.8}),
         json!({"messages":messages,"max_tokens":100000}),
         json!({"messages":messages,"tools":[]}),
     ] {
@@ -196,16 +201,19 @@ fn control_smoke() -> Result<()> {
         .append(true)
         .open(server.directory.path().join("server.toml"))?;
     writeln!(file, "\n[experts]\nmiss_bits = 2")?;
+    let error = server.control(&["config", "reload"]).unwrap_err();
     assert!(
-        server
-            .control(&["config", "reload"])
-            .unwrap_err()
-            .to_string()
-            .contains("restart required")
+        format!("{error:#}").contains("restart required"),
+        "{error:#}"
     );
     assert_eq!(server.control(&["config", "show"])?["effective"], before);
     assert_eq!(
-        complete(&server.address, &prompt, json!({"max_tokens":9}))?.status,
+        complete(
+            &server.address,
+            &prompt,
+            json!({"max_tokens":MAX_OUTPUT_TOKENS + 1})
+        )?
+        .status,
         400
     );
     wait_for(

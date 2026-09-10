@@ -19,6 +19,7 @@ use super::packed::Packed;
 use crate::kernels::{BATCH_MSL, FORWARD_MSL};
 use crate::metal::MetalContext;
 use crate::options::{Options, PoolBudget};
+use crate::units::BYTES_PER_GB;
 use anyhow::{Context, Result, ensure};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -532,6 +533,7 @@ pub struct Gpu<'a> {
 }
 
 /// Compact sequence checkpoint; no weights, expert slots, or device event counters.
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct PrefixState {
     pos: usize,
     mtp_len: usize,
@@ -577,6 +579,11 @@ impl<'a> Gpu<'a> {
         self.logits_row(0)
     }
 
+    /// Batched prefill writes one final row; row stepping retains every row.
+    pub(crate) fn last_logits_row(&self) -> usize {
+        self.batch_nb.saturating_sub(1)
+    }
+
     /// MTP logits of row `r` of the last draft pass.
     pub fn mtp_logits_row(&self, r: usize) -> &[f32] {
         let v = self.p.cfg.vocab_size;
@@ -586,7 +593,7 @@ impl<'a> Gpu<'a> {
 
     pub fn allocated_gb(&self) -> f64 {
         use objc2_metal::MTLDevice as _;
-        self.ctx.device.currentAllocatedSize() as f64 / 1e9
+        self.ctx.device.currentAllocatedSize() as f64 / BYTES_PER_GB as f64
     }
 
     /// What Metal will keep resident at once on this machine.
@@ -596,7 +603,7 @@ impl<'a> Gpu<'a> {
 
     pub fn working_set_limit_gb(&self) -> f64 {
         use objc2_metal::MTLDevice as _;
-        self.ctx.device.recommendedMaxWorkingSetSize() as f64 / 1e9
+        self.ctx.device.recommendedMaxWorkingSetSize() as f64 / BYTES_PER_GB as f64
     }
 }
 

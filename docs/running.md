@@ -24,8 +24,8 @@ restart. See [configuration and control](server-config.md) for limits,
 precedence, cache retention, socket selection and statistics.
 
 Use base URL `http://127.0.0.1:8080/v1` and model `cherenkov`. The server
-binds to localhost, keeps one model loaded, and serializes generation
-through a bounded queue. It provides `GET /v1/models`,
+binds to localhost and interleaves active requests on one loaded model,
+with bounded admission and output queues. It provides `GET /v1/models`,
 `POST /v1/chat/completions`, `POST /v1/completions`, and `GET /health`.
 Both completion endpoints support JSON responses and SSE streaming,
 finish reasons, token usage, and `stream_options.include_usage`.
@@ -38,17 +38,85 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"cherenkov","messages":[{"role":"user","content":"Explain hash collisions."}],"max_tokens":128,"temperature":0,"stream":true}'
 ```
 
-The API supports greedy text generation: `temperature` must be 0, `top_p`
-must be 1, and `n` must be 1. These are also the defaults.
+The API accepts `temperature` (0–2), `top_p` (0–1, excluding 0), `top_k`
+(0 means all), `seed` (unsigned integer), and presence/frequency penalties
+(−2–2). Defaults are greedy, unfiltered and without penalties. Penalties
+count prompt and output tokens; selection applies penalties, temperature,
+top-k and then nucleus filtering. Non-greedy or penalized requests disable
+argmax MTP verification. `n` must be 1.
+
 Chat accepts text messages with system/developer/user/assistant roles;
 text completions accept a string prompt. `max_completion_tokens` and
-`max_tokens` are supported. Sampling, stop strings, tool calling, JSON
-schema constraints, images, and the Responses API are not implemented;
-these unsupported generation controls return an error. Reasoning-effort
-and template variables are not implemented and currently have no effect.
-Requests use Content-Length; chunked request bodies
-are not supported. CLI-only `--raw`, `--check`, and `--repeat` do not apply
-to the server.
+`max_tokens` are supported. Stop strings, tool calling, JSON schema
+constraints, images, reasoning effort/template variables, and the Responses
+API are not implemented. Unsupported generation controls return an error.
+Requests use Content-Length; chunked request bodies are not supported.
+CLI-only `--raw`, `--check`, and `--repeat` do not apply to the server.
+
+CLI and chat rendering load `chat_template.jinja` from the model directory,
+falling back to the string or named `default` template in `tokenizer_config.json`.
+The renderer supplies messages, `add_generation_prompt=true` and
+`enable_thinking=false`. The checkpoint controls whitespace trimming, assistant
+history formatting and message-order validation. A system/developer message
+must come first, and the conversation must include a user query. Developer
+roles are mapped to system roles before rendering.
+
+Chat requires a template; raw prompts and text completions do not. Packing
+copies the template metadata into custom output directories. Running `pack`
+again with the original model fills missing template files in an older store
+without rebuilding its weights or replacing existing template files.
+
+### Sessions and cancellation
+
+These routes are Cherenkov extensions to the local HTTP API:
+
+| Route | Purpose |
+| --- | --- |
+| `POST /v1/sessions` | Create a session with optional sampling settings and `context_tokens`. |
+| `GET /v1/sessions/{id}` | Read committed messages, sampling settings and active request ID. |
+| `DELETE /v1/sessions/{id}` | Delete an idle session. |
+| `GET /v1/requests` | List registered requests and cancellation flags. |
+| `POST /v1/requests/{id}/cancel` | Cancel a queued or active request. |
+
+```sh
+curl http://127.0.0.1:8080/v1/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"temperature":0.7,"top_k":20,"seed":42,"context_tokens":2048}'
+
+# Use the returned session ID; send only the new messages on each turn.
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"session-...","request_id":"turn-1","messages":[{"role":"user","content":"Explain hash tables."}],"max_tokens":128,"stream":true}'
+
+curl -X POST http://127.0.0.1:8080/v1/requests/turn-1/cancel
+```
+
+Without `session_id`, send the entire conversation as usual. A session permits
+one in-flight turn; different sessions can progress together. Successful turns
+save messages, effective sampling settings and the RNG state. Omitted sampling
+fields inherit session settings; an explicit seed restarts the random stream.
+Greedy turns preserve an existing RNG without consuming draws. Session state is
+in memory and expires or is evicted under the configured limits.
+
+Cancellation rolls back the entire new turn, including RNG/settings changes.
+Retry from the last committed history; partial streamed text is provisional.
+The cancellation boundary is the next completed GPU step or prefill chunk,
+then an atomic decision immediately before publishing the final response.
+A cancellation that loses that final decision cannot undo the committed turn,
+even if the client subsequently disconnects. Active cancellation returns
+`finish_reason: "cancelled"`; cancellation before admission returns HTTP 499.
+Disconnects are detected on writes. Full output queues also cancel the request.
+
+Supply a `request_id` to cancel before receiving output: 1–80 ASCII letters,
+digits, hyphens or underscores, unique among registered requests. Otherwise
+one is generated. Completion IDs use that value; SSE headers also include
+`X-Request-ID`. Missing/expired sessions return 404, busy sessions or duplicate
+request IDs return 409, and exhausted request capacity returns 503.
+
+`context_tokens` can lower a request's or session's context cap, subject to the
+server maximum. It limits prompt plus output plus speculative headroom; it does
+not resize the shared GPU allocation. [Server configuration](server-config.md)
+covers active-state, history, queue, byte and retention limits.
 
 ### Repeated-prefix cache
 
@@ -69,11 +137,11 @@ are in memory and disappear when the server exits.
 
 TOML also controls the checkpoint count and idle expiry (16 entries and
 900 seconds by default). Hits refresh expiry; idle housekeeping reclaims
-expired state. These are checkpoints, not retained conversation sessions.
+expired state. This cache is separate from retained conversation history.
 
 The cache budget is reserved from the adaptive expert pool. Server
-buffer allocations plus the reserved prefix cache are limited to
-25 decimal GB, including prefill scratch allocations. This is distinct
+buffer allocations plus reserved prefix cache, active state and session history
+are limited to 25 decimal GB, including prefill scratch allocations. This is distinct
 from total process/system memory and the OS file cache. Reused tokens
 appear in `usage.prompt_tokens_details.cached_tokens`; with streaming,
 request `stream_options.include_usage` for the final usage event.
@@ -89,8 +157,10 @@ prefix reuse, and state-restoration checks.
 
 Default: **4-bit experts, two adaptive MTP drafts, no deadline cut**.
 `--drafts 0` disables speculation and does not load the draft head.
-Generation uses greedy argmax and the original no-thinking ChatML
-wrapper; `--raw` supplies the prompt without that wrapper.
+Generation defaults to greedy argmax and the checkpoint's Jinja template with
+thinking disabled; `--raw` bypasses template rendering. CLI sampling uses
+`--temperature`, `--top-k`, `--top-p`, `--seed`, `--presence-penalty` and
+`--frequency-penalty`, with the same rules as the HTTP API.
 
 ```sh
 # Lower-precision experts in prefill and decode:

@@ -1,6 +1,7 @@
 //! Model loading, pipeline creation, and fixed/pool allocation.
 
 use super::*;
+use crate::units::BYTES_PER_GB;
 
 /// Adaptive budget preserves the measured default: reserve 6 GB for the
 /// rest of the machine after fixed allocations. Explicit max may shrink
@@ -382,15 +383,19 @@ impl<'a> Gpu<'a> {
         let (limit_gb, fixed_gb) = {
             use objc2_metal::MTLDevice as _;
             (
-                ctx.device.recommendedMaxWorkingSetSize() as f64 / 1e9,
-                ctx.device.currentAllocatedSize() as f64 / 1e9,
+                ctx.device.recommendedMaxWorkingSetSize() as f64 / BYTES_PER_GB as f64,
+                ctx.device.currentAllocatedSize() as f64 / BYTES_PER_GB as f64,
             )
         };
-        let (mut gb, shrink) = pool_gb(limit_gb, fixed_gb + reserve as f64 / 1e9, options.pool_gb);
+        let (mut gb, shrink) = pool_gb(
+            limit_gb,
+            fixed_gb + reserve as f64 / BYTES_PER_GB as f64,
+            options.pool_gb,
+        );
         if let Some(limit) = allocation_limit {
             // Keep prefill headroom outside the fixed expert allocation. The
             // allocation guard also bounds subsequent scratch growth.
-            let available = limit as f64 / 1e9 - fixed_gb - 1.0;
+            let available = limit as f64 / BYTES_PER_GB as f64 - fixed_gb - 1.0;
             anyhow::ensure!(
                 available > 0.0,
                 "fixed model state leaves no expert/prefill capacity"
@@ -455,7 +460,8 @@ impl<'a> Gpu<'a> {
             _ => stride,
         };
         let mut res = loop {
-            let slots = (((gb * 1e9) / slot_stride as f64).max(64.0) as usize).min(n_records);
+            let slots = (((gb * BYTES_PER_GB as f64) / slot_stride as f64).max(64.0) as usize)
+                .min(n_records);
             match residency::Pool::new(
                 &ctx,
                 p.experts.as_ptr(),

@@ -19,6 +19,7 @@
 //! which must agree with the packing here bit for bit.
 
 use super::ExpertLayout;
+use crate::units::BYTES_PER_GB;
 use anyhow::{Context, Result};
 use std::io::Write as _;
 use std::os::unix::fs::FileExt as _;
@@ -405,7 +406,7 @@ fn announce_build(dir: &Path, l: &Layout, records: usize) -> u64 {
             "building"
         },
         bin.display(),
-        need as f64 / 1e9
+        need as f64 / BYTES_PER_GB as f64
     );
     let have = std::fs::metadata(&bin).map(|m| m.len()).unwrap_or(0);
     need.saturating_sub(have)

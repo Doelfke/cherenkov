@@ -36,9 +36,10 @@ to reset a configured pool budget, or `--no-eos=false` to restore EOS stopping.
 `config reload` rereads the original file and reapplies the original CLI
 overrides. It validates the complete candidate before publishing anything.
 Only `[defaults]` is reloadable: output length, EOS handling, streaming and
-usage-stream defaults. Every HTTP request captures its configuration
+usage-stream defaults, and `[defaults.sampling]`. Every HTTP request captures
+its configuration
 before reading its body; queued/active requests retain that generation.
-Request JSON can override output length, streaming and usage defaults,
+Request JSON can override sampling, output length, streaming and usage defaults,
 subject to the output and context limits. EOS policy remains server-owned.
 
 Changes to `[server]`, `[limits]` or `[experts]` reject the entire reload
@@ -46,14 +47,14 @@ with a restart-required error. An unchanged reload does not increment
 the generation. Reload without a startup config file returns an error.
 `--repack` is a one-time startup action and is never repeated by reload.
 
-Sampling, effort, independently sized resident sequences, retained session
-IDs and concurrent generation are not implemented. Their configuration
-fields are rejected. The current engine runs one generation at a
-time; the queue/readers settings do not increase active sequence count.
+Retained sessions capture sampling defaults when created and retain their
+committed settings across reloads. New stateless requests use the latest
+captured configuration. Effort and native template controls remain unsupported.
 
 ## Memory and expert policy
 
-`limits.memory_gb` bounds Metal allocation plus the reserved prefix cache,
+`limits.memory_gb` bounds Metal allocation plus reserved prefix cache, active
+sequence workspace and session history,
 up to 25 decimal GB. It is not a whole-process physical-memory cap. HTTP
 bodies and queues have separate bounds; JSON decoding has additional CPU
 overhead. The remaining unified memory and OS file cache must still fit
@@ -69,6 +70,38 @@ before lookup and once per second while the engine is idle. Busy GPU work
 can delay physical reclamation until a safe engine boundary. Oversized
 entries are skipped. This cache stores hybrid model state, not responses
 or persistent conversation history.
+
+`active_requests=2` permits round-robin progress, one GPU operation at a time.
+`prefill_quantum=128` caps each prompt chunk. Smaller chunks improve scheduling
+and cancellation responsiveness but can increase prefill overhead. Decode yields
+after a complete verification step. A single active request avoids checkpoint
+copies between steps; switching requests copies hybrid state to/from CPU
+vectors.
+The expert pool and execution scratch remain shared.
+
+`active_state_mib=1024` reserves active checkpoint storage, sampler workspace,
+token history and bounded text copies. Admission estimates the requested prompt
+plus output and speculative headroom, including vector growth. A request that
+cannot fit alone returns 503; requests that cannot fit together wait. This
+reservation is separate from prefix-cache snapshots. GPU context buffers are
+allocated for the server maximum; smaller `context_tokens` requests impose a
+logical cap and reduce checkpoint reservations, without resizing those buffers.
+
+`max_sessions=16`, `session_history_mib=16` and `session_idle_seconds=900` bound
+retained conversations. Zero sessions disables retention; zero idle seconds
+disables expiry. History evicts least recently used idle sessions. Queued,
+active
+and publishing turns pin their sessions. Successful turns refresh retention;
+cancelled or failed turns leave prior history/settings/RNG intact. History plus
+new messages must also fit `request_bytes`. There is no disk spill.
+
+`response_bytes=4194304` caps each generated text. Each response writer has a
+16-frame queue; overflow or a failed write cancels its generation. Writer
+sockets
+have a 30-second write timeout. Registered request IDs remain bounded through
+final output, so stalled writers cannot create unlimited threads. Requests
+waiting
+in the queue can be cancelled without waiting for a GPU slot.
 
 `resident_bits` selects 4, 3 or 2 bits. Omitted `miss_bits` follows it;
 4-bit residents may instead fetch misses at 3 or 2 bits. Both cached
@@ -111,17 +144,21 @@ two-second input deadline. Operations are `status`, `config_show` and
 ## Statistics
 
 `status --json` returns a bounded snapshot, including readiness during
-model load, active/queued/completed/failed/rejected request counts,
+model load, active/queued/completed/cancelled/failed/rejected request counts,
 current phase/config generation/token count, cumulative generated/prompt/
 cached tokens, prefill/decode seconds, and cache entries/bytes/evictions.
-It stores no prompts, response history or per-request metrics history.
+It includes active request/session IDs, per-request phase and token counts,
+active-state reservations, and session history bytes/count/evictions. The
+`current` field identifies the most recently dispatched request. Statistics
+store no prompts, response history or per-request metrics history.
 
-Prefill seconds cover cache preparation, including restore and checkpoint
-work; decode seconds include synchronous stream writes. These are service
-timings, not kernel benchmarks. Generated tokens include partial failed
+Prefill seconds cover advancing prompt chunks and storing checkpoints; decode
+seconds cover verification steps and enqueuing text. State switches and network
+writer time are excluded. These are worker timings, not end-to-end latency.
+Generated tokens include partial failed
 responses. Completed requests finished successfully through the response
 writer; failed requests include validation and generation failures after
-queueing. Rejected counts cover queue and reader capacity rejection.
+queueing. Rejected counts cover reader, request-admission and session-capacity rejection.
 
 Memory reports the most recent engine observation, with its uptime
 timestamp: Metal allocation, expert pool bytes, and resident expert count.

@@ -15,6 +15,7 @@
 //! it, so decode continues from the result.
 
 use super::*;
+use crate::units::BYTES_PER_KIB;
 
 mod allocation;
 mod attention;
@@ -112,7 +113,7 @@ pub(super) struct PrefillScratch {
 
 /// Bytes of scratch per prefill row (the stream-wide buffers dominate),
 /// for sizing the chunk to the memory headroom.
-pub const ROW_BYTES: usize = 560 * 1024;
+pub const ROW_BYTES: usize = 560 * BYTES_PER_KIB;
 
 impl<'a> Gpu<'a> {
     /// One decoder block over t rows of `hyper`: everything up to the

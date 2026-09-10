@@ -11,6 +11,11 @@ use std::{
 };
 use xtask::{capture::ChildGuard, util};
 
+mod stream;
+pub use stream::EventStream;
+
+pub const MAX_OUTPUT_TOKENS: usize = 64;
+
 pub fn binary() -> PathBuf {
     std::env::var_os("CHERENKOV_BINARY")
         .map(PathBuf::from)
@@ -37,16 +42,53 @@ pub fn wait_for(mut check: impl FnMut() -> Result<bool>, timeout: Duration) -> R
     anyhow::bail!("server did not reach expected state within {timeout:?}")
 }
 
+#[derive(Clone)]
+pub struct ServerSettings {
+    pub cache_idle_seconds: u64,
+    pub active_requests: usize,
+    pub active_state_mib: usize,
+    pub response_bytes: usize,
+    pub max_sessions: usize,
+    pub session_idle_seconds: u64,
+    pub queued_requests: usize,
+}
+
+impl Default for ServerSettings {
+    fn default() -> Self {
+        Self {
+            cache_idle_seconds: 900,
+            active_requests: 1,
+            active_state_mib: 1024,
+            response_bytes: 4 * 1024 * 1024,
+            max_sessions: 16,
+            session_idle_seconds: 900,
+            queued_requests: 8,
+        }
+    }
+}
+
 pub struct Server {
     pub process: ChildGuard,
     pub directory: tempfile::TempDir,
     pub address: String,
     model: PathBuf,
-    idle_seconds: u64,
+    settings: ServerSettings,
 }
 
 impl Server {
     pub fn start(idle_seconds: u64) -> Result<Self> {
+        Self::start_with_active(idle_seconds, 1)
+    }
+
+    pub fn start_with_active(idle_seconds: u64, active_requests: usize) -> Result<Self> {
+        Self::configured(ServerSettings {
+            cache_idle_seconds: idle_seconds,
+            active_requests,
+            ..ServerSettings::default()
+        })
+    }
+
+    pub fn configured(settings: ServerSettings) -> Result<Self> {
         let directory = tempfile::Builder::new()
             .prefix("cherenkov-smoke-")
             .tempdir_in("/private/tmp")?;
@@ -58,7 +100,7 @@ impl Server {
             &directory.path().join("control.sock"),
             &model,
             4,
-            idle_seconds,
+            &settings,
         )?;
         let log = fs::File::create(directory.path().join("server.log"))?;
         let process = ChildGuard(
@@ -74,7 +116,7 @@ impl Server {
             process,
             address: String::new(),
             model,
-            idle_seconds,
+            settings,
         };
         wait_for(
             || {
@@ -111,7 +153,8 @@ impl Server {
             .arg("--socket")
             .arg(self.socket())
             .output()?;
-        serde_json::from_str(&util::checked(output)?).context("control JSON")
+        let text = util::checked(output).with_context(|| format!("control command {args:?}"))?;
+        serde_json::from_str(&text).context("control JSON")
     }
 
     pub fn stats(&self) -> Result<Value> {
@@ -124,16 +167,49 @@ impl Server {
             &self.socket(),
             &self.model,
             tokens,
-            self.idle_seconds,
+            &self.settings,
         )
     }
 }
 
-fn write_config(path: &Path, socket: &Path, model: &Path, tokens: u64, idle: u64) -> Result<()> {
+fn write_config(
+    path: &Path,
+    socket: &Path,
+    model: &Path,
+    tokens: u64,
+    settings: &ServerSettings,
+) -> Result<()> {
+    let ServerSettings {
+        cache_idle_seconds,
+        active_requests,
+        active_state_mib,
+        response_bytes,
+        max_sessions,
+        session_idle_seconds,
+        queued_requests,
+    } = settings;
     fs::write(
         path,
         format!(
-            "[server]\nmodel_dir = {}\nsocket = {}\nport = 0\n[limits]\ncontext_tokens = 512\ncache_idle_seconds = {idle}\nmax_output_tokens = 8\n[defaults]\nmax_tokens = {tokens}\nno_eos = true\n",
+            r#"[server]
+model_dir = {}
+socket = {}
+port = 0
+[limits]
+context_tokens = 512
+cache_idle_seconds = {cache_idle_seconds}
+max_output_tokens = {MAX_OUTPUT_TOKENS}
+active_requests = {active_requests}
+active_state_mib = {active_state_mib}
+response_bytes = {response_bytes}
+max_sessions = {max_sessions}
+session_idle_seconds = {session_idle_seconds}
+queued_requests = {queued_requests}
+prefill_quantum = 32
+[defaults]
+max_tokens = {tokens}
+no_eos = true
+"#,
             serde_json::to_string(model)?,
             serde_json::to_string(socket)?
         ),

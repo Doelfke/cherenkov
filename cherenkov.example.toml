@@ -9,15 +9,22 @@ port = 8080
 drafts = 2
 
 [limits]
-# Decimal GB: Metal buffers plus reserved CPU prefix cache, not total process RSS.
+# Decimal GB: Metal buffers plus cache/session reservations, not total process RSS.
 memory_gb = 25.0
 context_tokens = 2048
 prefix_cache_mib = 512
 cache_max_entries = 16
 cache_idle_seconds = 900 # 0 disables expiry; size limits still apply.
+active_requests = 2 # Interleaved at decode-step or prefill-chunk boundaries.
+active_state_mib = 1024 # CPU sequence checkpoints and per-request workspace.
+prefill_quantum = 128 # Maximum prompt tokens before another request can run.
+max_sessions = 16 # 0 disables retained conversation history.
+session_history_mib = 16
+session_idle_seconds = 900 # Idle sessions expire; active turns are pinned.
 queued_requests = 8
 http_readers = 32
 request_bytes = 4194304
+response_bytes = 4194304
 max_output_tokens = 262144 # Also constrained by the remaining context.
 
 [defaults]
@@ -26,6 +33,15 @@ max_tokens = 64
 no_eos = false
 stream = false
 include_usage = false
+
+[defaults.sampling]
+# Reloadable defaults for stateless requests and newly created sessions.
+temperature = 0.0 # Greedy; nonzero sampling disables argmax MTP verification.
+top_p = 1.0
+top_k = 0 # 0 keeps the full vocabulary.
+# seed = 42 # Omitted: independently seeded random streams.
+presence_penalty = 0.0
+frequency_penalty = 0.0
 
 [experts]
 resident_bits = 4

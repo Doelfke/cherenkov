@@ -26,7 +26,7 @@ fn documented_example_resolves_to_current_defaults() {
 fn typed_policy_rejects_invalid_or_unimplemented_fields() {
     for text in [
         "[defaults]\ntemperature = 0.7",
-        "[limits]\nmax_sessions = 4",
+        "[limits]\nmax_sessions = 1025",
         "[experts]\nresident_bits = 1",
         "[experts]\nresident_bits = 3\nmiss_bits = 2",
         "[experts]\npool_gb = 'unknown'",

@@ -1,6 +1,9 @@
 //! Endpoint-specific JSON and SSE framing, independent of token generation.
 
-use super::{ApiKind, MODEL, Request, respond, sse};
+use super::{
+    ApiKind, MODEL,
+    http::{respond, sse},
+};
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::io::Write;
@@ -15,30 +18,31 @@ pub(super) struct Response<'a, W: Write> {
 }
 
 impl<'a, W: Write> Response<'a, W> {
-    pub(super) fn new(
+    pub(super) fn for_writer(
         out: &'a mut W,
         kind: ApiKind,
-        serial: u64,
+        id: &str,
         created: u64,
-        request: &Request,
+        streaming: bool,
+        include_usage: bool,
     ) -> Self {
-        let prefix = match kind {
-            ApiKind::Chat => "chatcmpl",
-            ApiKind::Completion => "cmpl",
-        };
         Self {
             out,
             kind,
-            id: format!("{prefix}-{created}-{serial}"),
+            id: id.to_owned(),
             created,
-            streaming: request.stream,
-            include_usage: request.include_usage,
+            streaming,
+            include_usage,
         }
     }
 
     pub(super) fn start(&mut self) -> Result<()> {
         if self.streaming {
-            self.out.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")?;
+            write!(
+                self.out,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nX-Request-ID: {}\r\nConnection: close\r\n\r\n",
+                self.id
+            )?;
             if self.kind == ApiKind::Chat {
                 let mut choice = self.delta_choice(Some(""), None);
                 choice["delta"]["role"] = json!("assistant");
@@ -46,6 +50,16 @@ impl<'a, W: Write> Response<'a, W> {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn fail(&mut self, message: &str) -> Result<()> {
+        let body = json!({"error":{"message":message,"type":"server_error"}});
+        if self.streaming {
+            sse(self.out, &body)?;
+            self.out.write_all(b"data: [DONE]\n\n")?;
+            return Ok(());
+        }
+        respond(self.out, 500, &body)
     }
 
     pub(super) fn text(&mut self, text: &str) -> Result<()> {
@@ -117,3 +131,7 @@ impl<'a, W: Write> Response<'a, W> {
         sse(self.out, &self.envelope(vec![choice]))
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/server/response.rs"]
+mod tests;

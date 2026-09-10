@@ -2,6 +2,20 @@ use super::*;
 use crate::config::{Config, Overrides, Source};
 use std::sync::atomic::AtomicUsize;
 
+#[test]
+fn buffered_control_response_survives_peer_close() {
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    server.write_all(b"{\"ok\":true}\n").unwrap();
+    drop(server);
+    assert_eq!(read_frame(&mut client).unwrap(), b"{\"ok\":true}");
+}
+
+#[test]
+fn idle_control_reads_respect_the_frame_deadline() {
+    let (client, _peer) = UnixStream::pair().unwrap();
+    let error = wait_readable(&client, Instant::now() + Duration::from_millis(10)).unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+}
 static SERIAL: AtomicUsize = AtomicUsize::new(0);
 
 struct Directory(PathBuf);

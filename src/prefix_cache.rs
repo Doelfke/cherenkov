@@ -15,6 +15,8 @@ struct Entry {
     complete: bool,
     next: u32,
     drafts: Vec<u32>,
+    logits: Vec<f32>,
+    drafting: bool,
     state: PrefixState,
     bytes: usize,
     touched: Instant,
@@ -75,15 +77,22 @@ impl PrefixCache {
         (self.entries.len(), self.used, self.evictions)
     }
 
-    fn store(&mut self, gpu: &Gpu<'_>, ids: &[u32], next: u32, drafts: &[u32]) {
+    fn store(&mut self, gpu: &Gpu<'_>, ids: &[u32], seed: &PrefillResume, drafting: bool) {
         let pos = gpu.pos;
-        let bytes =
-            gpu.prefix_state_bytes() + pos * 4 + std::mem::size_of::<Entry>() + drafts.len() * 4;
+        let bytes = gpu.prefix_state_bytes()
+            + pos * 4
+            + std::mem::size_of::<Entry>()
+            + seed.drafts.len() * 4
+            + seed.logits.as_ref().map_or(0, |l| l.len() * 4);
         if bytes > self.capacity || pos == 0 {
             return;
         }
 
-        if let Some(i) = self.entries.iter().position(|e| e.tokens == ids[..pos]) {
+        if let Some(i) = self
+            .entries
+            .iter()
+            .position(|e| e.tokens == ids[..pos] && e.drafting == drafting)
+        {
             self.used -= self.entries.remove(i).unwrap().bytes;
         }
         // Evict BEFORE copying state: allocation peaks also stay within the cache budget.
@@ -91,13 +100,15 @@ impl PrefixCache {
             self.evict_oldest();
         }
 
-        let following = gpu.has_mtp().then(|| ids.get(pos).copied().unwrap_or(next));
+        let following = drafting.then(|| ids.get(pos).copied().unwrap_or(seed.next));
         self.entries.push_back(Entry {
             tokens: ids[..pos].to_vec(),
             following,
             complete: pos == ids.len(),
-            next,
-            drafts: drafts.to_vec(),
+            next: seed.next,
+            drafts: seed.drafts.clone(),
+            logits: seed.logits.clone().unwrap_or_default(),
+            drafting,
             state: gpu.save_prefix(),
             bytes,
             touched: Instant::now(),
@@ -105,22 +116,24 @@ impl PrefixCache {
         self.used += bytes;
     }
 
-    pub(crate) fn prepare(
+    pub(crate) fn begin(
         &mut self,
         gpu: &mut Gpu<'_>,
         ids: &[u32],
         stable_boundaries: &[usize],
         options: &Options,
-    ) -> Result<(PrefillResume, usize)> {
-        let started = std::time::Instant::now();
+    ) -> Result<Prefill> {
         self.expire();
-
+        let drafting = options.effective_drafts() > 0;
         let mut cached = 0;
+        let mut seed = PrefillResume::default();
         if let Some(i) = self
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| matches(&e.tokens, e.following, e.complete, ids))
+            .filter(|(_, e)| {
+                e.drafting == drafting && matches(&e.tokens, e.following, e.complete, ids)
+            })
             .max_by_key(|(_, e)| e.tokens.len())
             .map(|(i, _)| i)
         {
@@ -128,88 +141,88 @@ impl PrefixCache {
             entry.touched = Instant::now();
             gpu.restore_prefix(&entry.state)?;
             cached = entry.tokens.len();
-            let seed = PrefillResume {
+            seed = PrefillResume {
                 next: entry.next,
                 drafts: entry.drafts.clone(),
+                logits: Some(entry.logits.clone()),
             };
             self.entries.push_back(entry);
-            if cached == ids.len() {
-                eprintln!(
-                    "prefix cache: {cached}/{} tokens reused, {:.1} MiB cached",
-                    ids.len(),
-                    self.used as f64 / 1048576.0
-                );
-                return Ok((seed, cached));
-            }
         }
-
-        let pf_min = std::env::var("CHERENKOV_PREFILL_MIN")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(64);
-        let pf_rows = std::env::var("CHERENKOV_PREFILL_CHUNK")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_else(|| gpu.prefill_rows_fit())
-            .max(1);
-        let row_max = std::env::var("CHERENKOV_ROWS_MAX")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(MAX_NB)
-            .clamp(1, MAX_NB);
-
         let mut boundaries = vec![ids.len()];
         if self.capacity > 0 {
-            for &boundary in stable_boundaries {
-                if boundary > cached && boundary < ids.len() {
-                    boundaries.push(boundary);
-                }
-            }
-            // This checkpoint supports arbitrary prompt extensions: its MTP
-            // lookahead is the old prompt's known final token, not a prediction.
+            boundaries.extend(
+                stable_boundaries
+                    .iter()
+                    .copied()
+                    .filter(|&b| b > cached && b < ids.len()),
+            );
             if ids.len() > 1 {
                 boundaries.push(ids.len() - 1);
             }
         }
         boundaries.sort_unstable();
         boundaries.dedup();
+        Ok(Prefill {
+            cached,
+            boundaries,
+            seed,
+        })
+    }
+}
 
-        let mut seed = PrefillResume {
-            next: ids[0],
-            drafts: Vec::new(),
+/// The cursor stays with its request; one advance processes at most one chunk.
+pub(crate) struct Prefill {
+    pub cached: usize,
+    boundaries: Vec<usize>,
+    pub seed: PrefillResume,
+}
+
+impl Prefill {
+    pub(crate) fn advance(
+        &mut self,
+        gpu: &mut Gpu<'_>,
+        cache: &mut PrefixCache,
+        ids: &[u32],
+        options: &Options,
+        quantum: usize,
+    ) -> Result<bool> {
+        let Some(end) = self.boundaries.iter().copied().find(|&end| end > gpu.pos) else {
+            return Ok(true);
         };
-        for end in boundaries {
-            if end <= gpu.pos {
-                continue;
-            }
-            let remaining = end - gpu.pos;
-            let engine = remaining >= pf_min;
-            let chunk_size = if engine {
-                remaining.div_ceil(remaining.div_ceil(pf_rows))
-            } else {
-                row_max
-            };
-            while gpu.pos < end {
-                let pos = gpu.pos;
-                let n = (end - pos).min(chunk_size);
-                let rows = &ids[pos..pos + n];
-                let following = ids.get(pos + n).copied();
-                seed = prefill_rows(gpu, rows, following, options.drafts as usize, engine)?;
-                if gpu.pos == end || engine {
-                    self.store(gpu, ids, seed.next, &seed.drafts);
-                }
-            }
-            gpu.prefill_release();
+        let pf_min = std::env::var("CHERENKOV_PREFILL_MIN")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(64);
+        let remaining = end - gpu.pos;
+        let engine = remaining >= pf_min;
+        let capacity = if engine {
+            std::env::var("CHERENKOV_PREFILL_CHUNK")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| gpu.prefill_rows_fit())
+                .min(gpu.prefill_rows_fit())
+        } else {
+            std::env::var("CHERENKOV_ROWS_MAX")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(MAX_NB)
+                .clamp(1, MAX_NB)
+        };
+        let size = capacity.min(quantum).max(1);
+        let n = remaining.div_ceil(remaining.div_ceil(size));
+        let pos = gpu.pos;
+        self.seed = prefill_rows(
+            gpu,
+            &ids[pos..pos + n],
+            ids.get(pos + n).copied(),
+            options.effective_drafts(),
+            engine,
+        )?;
+        if gpu.pos == end || engine {
+            cache.store(gpu, ids, &self.seed, options.effective_drafts() > 0);
         }
-
-        eprintln!(
-            "prefix cache: {cached}/{} tokens reused, {} prefetched in {:.3}s, {:.1} MiB cached",
-            ids.len(),
-            ids.len() - cached,
-            started.elapsed().as_secs_f64(),
-            self.used as f64 / 1048576.0
-        );
-        Ok((seed, cached))
+        gpu.prefill_release();
+        Ok(gpu.pos == ids.len())
     }
 }
 
@@ -227,6 +240,7 @@ fn prefill_rows(
         let mut seed = PrefillResume {
             next,
             drafts: Vec::new(),
+            logits: Some(gpu.logits().to_vec()),
         };
         if drafts == 0 || !last {
             return Ok(seed);
@@ -243,6 +257,7 @@ fn prefill_rows(
     let mut seed = PrefillResume {
         next: result[rows.len() - 1],
         drafts: Vec::new(),
+        logits: Some(gpu.logits_row(rows.len() - 1).to_vec()),
     };
     if drafts == 0 {
         return Ok(seed);

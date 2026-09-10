@@ -17,6 +17,7 @@
 //! matters when the machine is short of memory.
 
 use crate::metal::MetalContext;
+use crate::units::BYTES_PER_KIB;
 use anyhow::{Context, Result};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -184,7 +185,7 @@ pub fn fetch_into_slots(file: &File, fetch: &[(usize, usize, usize)]) {
 /// residency set will pin).
 fn read_through_cache(file: &File, stride: usize, offsets: &[usize]) {
     use std::os::unix::fs::FileExt as _;
-    const PIECE: usize = 256 * 1024;
+    const PIECE: usize = 256 * BYTES_PER_KIB;
     std::thread::scope(|s| {
         for &off in offsets {
             s.spawn(move || {

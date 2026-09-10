@@ -54,10 +54,12 @@ impl Gpu<'_> {
         let n_rep = n_heads / n_kv;
         let kv_row = n_kv * hd;
         let nbu = t as u32;
+
         self.qmm(enc, &a.q, &pf.mixed, &pf.qg, t);
         self.qmm(enc, &a.k, &pf.mixed, &pf.k, t);
         self.qmm(enc, &a.v, &pf.mixed, &pf.v, t);
         self.qmm(enc, &a.iqk, &pf.mixed, &pf.iqk, t);
+
         let rot = (hd as f64 * c.partial_rotary_factor) as u32;
         let qp = QkRopeParams {
             n_heads: n_heads as u32,
@@ -81,6 +83,7 @@ impl Gpu<'_> {
             128,
             true,
         );
+
         let kp = QkRopeParams {
             n_heads: n_kv as u32,
             stride: hd as u32,
@@ -99,6 +102,7 @@ impl Gpu<'_> {
             128,
             true,
         );
+
         // Indexer: raw keys, block keys, and block selection for rows past
         // the budget (as a bitmask for the softmax).
         let ratio = c.indexer_compress_ratio;
@@ -136,6 +140,7 @@ impl Gpu<'_> {
             256,
             false,
         );
+
         if ip.b1 > ip.b0 {
             self.dispatch(
                 enc,
@@ -151,6 +156,7 @@ impl Gpu<'_> {
                 true,
             );
         }
+
         if (base + t) / ratio > kblk {
             self.dispatch(
                 enc,
@@ -165,6 +171,7 @@ impl Gpu<'_> {
                 ihd,
                 true,
             );
+
             self.dispatch(
                 enc,
                 &self.pipes.index_score,
@@ -178,6 +185,7 @@ impl Gpu<'_> {
                 256,
                 true,
             );
+
             self.dispatch(
                 enc,
                 &self.pipes.index_select,
@@ -193,6 +201,7 @@ impl Gpu<'_> {
                 true,
             );
         }
+
         let scale_off = kv_q8_side(self.max_t, kv_row).0;
         let kq = KvQParams {
             row: kv_row as u32,
@@ -214,6 +223,7 @@ impl Gpu<'_> {
             128,
             true,
         );
+
         // GEMM attention per query sub-chunk and kv head.
         let n_heads_u = n_heads as u32;
         let mut q0 = 0;
@@ -248,6 +258,7 @@ impl Gpu<'_> {
                 256,
                 false,
             );
+
             let m = n_rep * n;
             let sm = SelMaskParams {
                 row0: q0 as u32,
@@ -274,6 +285,7 @@ impl Gpu<'_> {
                     256,
                     false,
                 );
+
                 let ps = GemmHParams {
                     m: m as u32,
                     n: kl_pad as u32,
@@ -295,6 +307,7 @@ impl Gpu<'_> {
                     128,
                     true,
                 );
+
                 self.dispatch(
                     enc,
                     &self.pipes.softmax_sel,
@@ -309,6 +322,7 @@ impl Gpu<'_> {
                     256,
                     true,
                 );
+
                 let po = GemmHParams {
                     m: m as u32,
                     n: hd as u32,
@@ -330,6 +344,7 @@ impl Gpu<'_> {
                     128,
                     true,
                 );
+
                 self.dispatch(
                     enc,
                     &self.pipes.attn_o_scatter,
@@ -345,8 +360,10 @@ impl Gpu<'_> {
                     false,
                 );
             }
+
             q0 += n;
         }
+
         self.qmm(enc, &a.o, &pf.attn_out, &pf.mix_out, t);
     }
 }

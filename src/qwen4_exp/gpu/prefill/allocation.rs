@@ -1,6 +1,7 @@
 //! Prefill scratch allocation and chunk capacity.
 
 use super::*;
+use crate::units::BYTES_PER_GB;
 
 impl Gpu<'_> {
     pub(super) fn pf_alloc(&self, rows: usize, all_logits: bool) -> Result<PrefillScratch> {
@@ -88,7 +89,7 @@ impl Gpu<'_> {
             .unwrap_or(device_limit)
             .min(device_limit) as f64;
         let used = self.ctx.device.currentAllocatedSize() as f64;
-        let rows = ((limit - used - 1e9) / ROW_BYTES as f64).max(0.0) as usize;
+        let rows = ((limit - used - BYTES_PER_GB as f64) / ROW_BYTES as f64).max(0.0) as usize;
         (rows / 256 * 256).clamp(512, 4096)
     }
 }

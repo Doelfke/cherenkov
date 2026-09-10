@@ -9,6 +9,7 @@
 
 use super::{DenseEntry, ExpertLayout, Manifest, NgramLayout, PAGE};
 use crate::tensors::{Dtype, ModelWeights, TensorInfo};
+use crate::units::BYTES_PER_GB;
 use anyhow::{Context, Result, ensure};
 use memmap2::Advice;
 use std::fs::File;
@@ -49,10 +50,25 @@ pub fn prepare(model_dir: &Path, output: Option<&Path>, experts: &[u32]) -> Resu
         "the packed store at {} belongs to a different source model",
         out.display()
     );
+    copy_chat_metadata(model_dir, out)?;
     eprintln!("4-bit base ready at {}", out.display());
     let low_bits: Vec<_> = experts.iter().copied().filter(|&bits| bits != 4).collect();
     super::lowbit::ensure_many(out, &manifest.experts, &low_bits)?;
     eprintln!("requested expert stores ready");
+    Ok(())
+}
+
+/// Older packed directories can acquire template metadata without repacking weights.
+fn copy_chat_metadata(model_dir: &Path, out_dir: &Path) -> Result<()> {
+    for name in ["chat_template.jinja", "tokenizer_config.json"] {
+        let source = model_dir.join(name);
+        let target = out_dir.join(name);
+        if !source.is_file() || target.exists() {
+            continue;
+        }
+        std::fs::copy(source, target)
+            .with_context(|| format!("copying {name} into the packed store"))?;
+    }
     Ok(())
 }
 
@@ -108,8 +124,8 @@ impl Progress {
             let s = self.start.elapsed().as_secs_f64();
             eprintln!(
                 "  {what}: {:.1} GB written, {:.2} GB/s, {:.0} s",
-                self.bytes as f64 / 1e9,
-                self.bytes as f64 / 1e9 / s,
+                self.bytes as f64 / BYTES_PER_GB as f64,
+                self.bytes as f64 / BYTES_PER_GB as f64 / s,
                 s
             );
         }
@@ -152,6 +168,7 @@ pub fn pack(model_dir: &Path, out_dir: &Path) -> Result<()> {
             std::fs::copy(model_dir.join(name), out_dir.join(name))
                 .with_context(|| format!("copying {name} into the packed store"))?;
         }
+        copy_chat_metadata(model_dir, out_dir)?;
     }
     let manifest = Manifest {
         version: 1,
@@ -168,7 +185,7 @@ pub fn pack(model_dir: &Path, out_dir: &Path) -> Result<()> {
         "packed into {} in {:.0} s ({:.1} GB)",
         out_dir.display(),
         progress.start.elapsed().as_secs_f64(),
-        progress.bytes as f64 / 1e9
+        progress.bytes as f64 / BYTES_PER_GB as f64
     );
     Ok(())
 }
@@ -221,7 +238,7 @@ fn pack_dense(
         eprintln!(
             "dense.bin: {} tensors, {:.2} GB",
             dense.len(),
-            pos as f64 / 1e9
+            pos as f64 / BYTES_PER_GB as f64
         );
     }
 
@@ -314,7 +331,7 @@ fn pack_experts(
         experts,
         layout.record_bytes,
         layout.record_stride,
-        (layout.layers * experts) as f64 * layout.record_stride as f64 / 1e9
+        (layout.layers * experts) as f64 * layout.record_stride as f64 / BYTES_PER_GB as f64
     );
     {
         let mut w = BufWriter::with_capacity(8 << 20, File::create(out_dir.join("experts.bin"))?);
@@ -374,7 +391,7 @@ fn pack_experts(
             progress.add(experts as u64 * layout.record_stride, prefix);
         }
         w.flush()?;
-        eprintln!("experts.bin: {:.2} GB", pos as f64 / 1e9);
+        eprintln!("experts.bin: {:.2} GB", pos as f64 / BYTES_PER_GB as f64);
     }
 
     Ok(layout)
@@ -446,7 +463,7 @@ fn pack_ngram(
     };
     eprintln!(
         "ngram: {shards} shards x {rows_per_shard} rows, dim {dim}, group {ngroup}, row {row_bytes} bytes, {:.2} GB",
-        layout_n.rows as f64 * row_bytes as f64 / 1e9
+        layout_n.rows as f64 * row_bytes as f64 / BYTES_PER_GB as f64
     );
     {
         let mut w = BufWriter::with_capacity(8 << 20, File::create(out_dir.join("ngram.bin"))?);

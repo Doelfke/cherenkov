@@ -1,6 +1,7 @@
 //! Server configuration: built-ins, one TOML file, then explicit CLI overrides.
 
 use crate::options::{Options, PoolBudget, cut, positive};
+use crate::units::{BYTES_PER_GB, BYTES_PER_MIB};
 use anyhow::{Context, Result, ensure};
 use clap::Args;
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,13 @@ pub struct Limits {
     pub http_readers: usize,
     pub request_bytes: usize,
     pub max_output_tokens: usize,
+    pub active_requests: usize,
+    pub active_state_mib: usize,
+    pub prefill_quantum: usize,
+    pub max_sessions: usize,
+    pub session_history_mib: usize,
+    pub session_idle_seconds: u64,
+    pub response_bytes: usize,
 }
 
 impl Default for Limits {
@@ -71,8 +79,15 @@ impl Default for Limits {
             cache_idle_seconds: 900,
             queued_requests: 8,
             http_readers: 32,
-            request_bytes: 4 * 1024 * 1024,
+            request_bytes: 4 * BYTES_PER_MIB,
             max_output_tokens: 262144,
+            active_requests: 2,
+            active_state_mib: 1024,
+            prefill_quantum: 128,
+            max_sessions: 16,
+            session_history_mib: 16,
+            session_idle_seconds: 900,
+            response_bytes: 4 * BYTES_PER_MIB,
         }
     }
 }
@@ -84,6 +99,7 @@ pub struct Defaults {
     pub no_eos: bool,
     pub stream: bool,
     pub include_usage: bool,
+    pub sampling: crate::sampling::Sampling,
 }
 
 impl Default for Defaults {
@@ -93,6 +109,7 @@ impl Default for Defaults {
             no_eos: false,
             stream: false,
             include_usage: false,
+            sampling: crate::sampling::Sampling::default(),
         }
     }
 }
@@ -142,6 +159,7 @@ impl Config {
             max_ctx: self.limits.context_tokens,
             max_tokens: self.defaults.max_tokens,
             no_eos: self.defaults.no_eos,
+            sampling: self.defaults.sampling.clone(),
             build_missing_store: self.experts.build_missing_store,
             ..Options::default()
         }
@@ -149,6 +167,7 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         self.options().validate()?;
+        self.validate_sessions()?;
         let l = &self.limits;
         ensure!(
             l.memory_gb.is_finite() && l.memory_gb > 0.0 && l.memory_gb <= 25.0,
@@ -167,8 +186,8 @@ impl Config {
             "cache_max_entries must be 1..1024"
         );
         ensure!(
-            self.cache_bytes() < self.memory_bytes(),
-            "prefix cache exceeds memory budget"
+            self.reserved_bytes() < self.memory_bytes(),
+            "cache and session reservations exceed memory budget"
         );
         ensure!(
             (1..=1024).contains(&l.queued_requests),
@@ -179,7 +198,7 @@ impl Config {
             "http_readers must be 1..256"
         );
         ensure!(
-            (1..=16 * 1024 * 1024).contains(&l.request_bytes),
+            (1..=16 * BYTES_PER_MIB).contains(&l.request_bytes),
             "request_bytes must be 1..16777216"
         );
         ensure!(
@@ -205,11 +224,44 @@ impl Config {
     }
 
     pub fn cache_bytes(&self) -> usize {
-        self.limits.prefix_cache_mib * 1024 * 1024
+        self.limits.prefix_cache_mib * BYTES_PER_MIB
+    }
+
+    pub fn reserved_bytes(&self) -> usize {
+        (self.limits.prefix_cache_mib
+            + self.limits.active_state_mib
+            + self.limits.session_history_mib)
+            * BYTES_PER_MIB
+    }
+
+    fn validate_sessions(&self) -> Result<()> {
+        let l = &self.limits;
+        ensure!(
+            (1..=16).contains(&l.active_requests),
+            "active_requests must be 1..16"
+        );
+        ensure!(
+            (1..=8192).contains(&l.active_state_mib),
+            "active_state_mib must be 1..8192"
+        );
+        ensure!(
+            (1..=1024).contains(&l.prefill_quantum),
+            "prefill_quantum must be 1..1024"
+        );
+        ensure!(l.max_sessions <= 1024, "max_sessions must be 0..1024");
+        ensure!(
+            (1..=2048).contains(&l.session_history_mib),
+            "session_history_mib must be 1..2048"
+        );
+        ensure!(
+            (1..=16 * BYTES_PER_MIB).contains(&l.response_bytes),
+            "response_bytes must be 1..16777216"
+        );
+        Ok(())
     }
 
     pub fn memory_bytes(&self) -> usize {
-        (self.limits.memory_gb * 1e9) as usize
+        (self.limits.memory_gb * BYTES_PER_GB as f64) as usize
     }
 
     pub fn restart_changes(&self, new: &Self) -> Vec<&'static str> {

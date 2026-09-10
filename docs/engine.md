@@ -11,7 +11,10 @@ rest of the network from resident weights. Neither uses MLX at runtime.
 | --- | --- | --- |
 | Model configuration and packed layout | `src/qwen4_exp/config.rs`, `manifest.rs` | Host/shader layout contracts |
 | Paths and checkpoint downloads | `src/storage.rs`, `src/download.rs` | None |
-| Generation, draft acceptance, EOS | `src/runner.rs` | `common/sampling.metal`, `qwen4_exp/mtp.metal` |
+| CLI generation and prompt processing | `src/runner.rs` | Prefill and decode kernels |
+| Shared prompt formatting and cache boundaries | `src/prompt.rs` | None |
+| Draft acceptance, sampling, EOS | `src/runner/decode.rs`, `src/sampling.rs` | `common/sampling.metal`, `qwen4_exp/mtp.metal` |
+| CPU comparisons and research dumps | `src/runner/diagnostics.rs` | None |
 | Shared GPU types, buffers, and state fields | `src/qwen4_exp/gpu.rs` | Both kernel libraries |
 | Loading and pipeline creation | `src/qwen4_exp/gpu/load.rs` | Sources assembled by `src/kernels.rs` |
 | Host/shader parameter layouts | `src/qwen4_exp/gpu/params.rs` | Matching subsystem structs |

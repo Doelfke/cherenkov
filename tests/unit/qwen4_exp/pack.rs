@@ -48,6 +48,9 @@ fn checkpoint(dir: &Path) {
 fn fresh_checkpoint_builds_base_and_both_targets_at_custom_output() {
     let dir = tempfile::tempdir().unwrap();
     checkpoint(dir.path());
+    let template = "{{ messages[0].content }}";
+    std::fs::write(dir.path().join("chat_template.jinja"), template).unwrap();
+    std::fs::write(dir.path().join("tokenizer_config.json"), "{}").unwrap();
     let out = dir.path().join("custom/nested/store");
     prepare(dir.path(), Some(&out), &[2, 3]).unwrap();
     for name in [
@@ -61,13 +64,24 @@ fn fresh_checkpoint_builds_base_and_both_targets_at_custom_output() {
         "ngram.bin",
         "config.json",
         "tokenizer.json",
+        "chat_template.jinja",
+        "tokenizer_config.json",
     ] {
         assert!(out.join(name).is_file(), "{name}");
     }
     assert!(!dir.path().join("packed").exists());
+    assert_eq!(
+        std::fs::read_to_string(out.join("chat_template.jinja")).unwrap(),
+        template
+    );
     let base = std::fs::read(out.join("experts.bin")).unwrap();
+    std::fs::remove_file(out.join("chat_template.jinja")).unwrap();
     prepare(dir.path(), Some(&out), &[4, 2, 3]).unwrap();
     assert_eq!(base, std::fs::read(out.join("experts.bin")).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(out.join("chat_template.jinja")).unwrap(),
+        template
+    );
 }
 
 #[test]

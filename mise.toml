@@ -2,6 +2,7 @@
 rust = { version = "1.98.1", profile = "minimal", components = ["clippy", "rustfmt"] }
 node = "22.22.0"
 "npm:markdownlint-cli2" = "0.23.2"
+"cargo:styling-lint" = "0.1.0"
 
 [tasks.fmt]
 description = "Format Rust source"
@@ -10,6 +11,16 @@ run = "cargo fmt --all"
 [tasks.fmt-check]
 description = "Check Rust formatting"
 run = "cargo fmt --all -- --check"
+
+[tasks.lint-spacing]
+description = "Check blank lines between Rust statement groups"
+depends = ["fmt-check"]
+run = "styling-lint check src tests xtask"
+
+[tasks.fix-spacing]
+description = "Format Rust and add blank lines between statement groups"
+depends = ["fmt"]
+run = "styling-lint fix src tests xtask"
 
 [tasks.lint-md]
 description = "Lint repository Markdown"

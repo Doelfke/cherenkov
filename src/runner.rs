@@ -1,35 +1,15 @@
-use crate::{options::Options, qwen4_exp, tok};
-use anyhow::Result;
+//! CLI generation, prompt processing and shared decode entry points.
+
+use crate::units::BYTES_PER_GB;
+use crate::{options::Options, prompt::Prompt, qwen4_exp, tok};
+use anyhow::{Context, Result};
 use std::path::Path;
 
-fn argmax(logits: &[f32]) -> u32 {
-    logits
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.total_cmp(b.1))
-        .map(|(i, _)| i as u32)
-        .unwrap()
-}
+mod decode;
+mod diagnostics;
 
-fn chatml(prompt: &str, raw: bool) -> String {
-    if raw {
-        prompt.to_string()
-    } else {
-        format!(
-            "<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
-        )
-    }
-}
-
-fn logits_diff(a: &[f32], b: &[f32]) -> (f32, f32) {
-    let max_abs = a
-        .iter()
-        .zip(b)
-        .map(|(x, y)| (x - y).abs())
-        .fold(0.0f32, f32::max);
-    let scale = b.iter().map(|v| v.abs()).fold(0.0f32, f32::max).max(1e-6);
-    (max_abs, max_abs / scale)
-}
+pub(crate) use decode::Decode;
+use diagnostics::{dump_decode, dump_prefill_chunk, dump_run, qwen4_exp_check_rows};
 
 pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
     options.validate()?;
@@ -41,8 +21,16 @@ pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
         options.repeat,
     );
     let tok = tok::ChatTokenizer::load(model_dir)?;
-    let ids = tok.encode(&chatml(prompt, raw))?;
-    check_budget(ids.len(), max_tokens, options.drafts as usize, max_ctx)?;
+    let prompt = if raw {
+        Prompt::raw(prompt.to_owned())
+    } else {
+        tok.template
+            .as_ref()
+            .context("checkpoint has no chat template")?
+            .user(prompt)?
+    };
+    let ids = tok.encode(&prompt.text)?;
+    check_budget(ids.len(), max_tokens, options.effective_drafts(), max_ctx)?;
     if options.cut_weak > 0.0 {
         eprintln!(
             "WARNING: --cut-weak skips late weak experts; output depends on disk timing and is not reproducible."
@@ -59,7 +47,7 @@ pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
     eprintln!(
         "cherenkov gpu: max_ctx {max_ctx}, {:.2} GB Metal (expert pool {:.1} GB = {} records, working-set limit {:.2} GB), load {:.2}s, clock probe {:.2} ms",
         gpu.allocated_gb(),
-        gpu.pool_bytes() as f64 / 1e9,
+        gpu.pool_bytes() as f64 / BYTES_PER_GB as f64,
         gpu.pool_slots(),
         gpu.working_set_limit_gb(),
         t0.elapsed().as_secs_f64(),
@@ -91,166 +79,6 @@ pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
     }
     eprintln!("clock probe at end {:.2} ms", gpu.throttle_ms()?);
     dump_run(&gpu)
-}
-
-fn dump_run(gpu: &qwen4_exp::gpu::Gpu<'_>) -> Result<()> {
-    if let Ok(path) = std::env::var("CHERENKOV_DUMP_EXPERTS") {
-        std::fs::write(&path, serde_json::to_vec(&gpu.expert_history)?)?;
-        eprintln!(
-            "expert history ({} steps) written to {path}",
-            gpu.expert_history.len()
-        );
-    }
-    if let Ok(path) = std::env::var("CHERENKOV_DUMP_STATES") {
-        // [step][block] = (router input, top-k), row 0 only; f32 little
-        // endian after a small JSON header line.
-        use std::io::Write as _;
-        let mut f = std::io::BufWriter::new(std::fs::File::create(&path)?);
-        let steps = gpu.state_history.len();
-        let blocks = gpu.state_history.first().map_or(0, |s| s.len());
-        let hidden = gpu
-            .state_history
-            .first()
-            .and_then(|s| s.first())
-            .map_or(0, |b| b.0.len());
-        let k = gpu
-            .state_history
-            .first()
-            .and_then(|s| s.first())
-            .map_or(0, |b| b.1.len());
-        // Steps carry 48 or 49 blocks (the folded MTP block only runs on
-        // drafting steps), so each step is prefixed with its count.
-        writeln!(
-            f,
-            "{{\"format\":2,\"steps\":{steps},\"blocks\":{blocks},\"hidden\":{hidden},\"k\":{k}}}"
-        )?;
-        for step in &gpu.state_history {
-            f.write_all(&(step.len() as u32).to_le_bytes())?;
-            for (x, ids) in step {
-                for v in x {
-                    f.write_all(&v.to_le_bytes())?;
-                }
-                for id in ids {
-                    f.write_all(&id.to_le_bytes())?;
-                }
-            }
-        }
-        eprintln!("router states ({steps} steps x {blocks} blocks x {hidden}) written to {path}");
-    }
-    if let Ok(path) = std::env::var("CHERENKOV_DUMP_ROUTES") {
-        std::fs::write(&path, serde_json::to_vec(&gpu.route_history)?)?;
-        eprintln!(
-            "route history ({} steps) written to {path}",
-            gpu.route_history.len()
-        );
-    }
-    if let Ok(path) = std::env::var("CHERENKOV_DUMP_LA") {
-        std::fs::write(&path, serde_json::to_vec(&gpu.la_log)?)?;
-        eprintln!(
-            "lookahead log ({} predictions) written to {path}",
-            gpu.la_log.len()
-        );
-    }
-    Ok(())
-}
-
-/// Compare the GPU's rows against the CPU reference, which forwards the
-/// same tokens one at a time. With `next` (the token after each row), the
-/// CPU also runs the MTP head per row and the last row's draft logits are
-/// compared with the GPU's.
-#[allow(clippy::too_many_arguments)]
-fn qwen4_exp_check_rows(
-    m: &qwen4_exp::cpu::CpuModel<'_>,
-    st: &mut qwen4_exp::cpu::State,
-    gpu: &qwen4_exp::gpu::Gpu<'_>,
-    rows: &[u32],
-    next: Option<&[u32]>,
-    pos0: usize,
-    label: &str,
-    prefill: bool,
-) -> Result<()> {
-    for (r, &t) in rows.iter().enumerate() {
-        let ref_logits = m.forward_token(t, st)?;
-        let g = if prefill {
-            gpu.pf_logits_row(r)
-        } else {
-            gpu.logits_row(r)
-        };
-        let (abs, rel) = logits_diff(g, &ref_logits);
-        let (ga, ra) = (argmax(g), argmax(&ref_logits));
-        eprintln!(
-            "  {label} {}: gpu argmax {ga} cpu argmax {ra} | max abs diff {abs:.4} (rel {rel:.2e}){}",
-            pos0 + r,
-            if ga == ra { "" } else { "  <-- MISMATCH" }
-        );
-        if let Some(next) = next {
-            let hyper = st.last_hyper.clone();
-            let (ml, _) = m.mtp_forward(next[r], &hyper, pos0 + r, st)?;
-            if r + 1 == rows.len() {
-                let g = gpu.mtp_logits_row(if prefill { 0 } else { r });
-                let (abs, rel) = logits_diff(g, &ml);
-                let (ga, ra) = (argmax(g), argmax(&ml));
-                eprintln!(
-                    "  {label} {} mtp: gpu draft {ga} cpu draft {ra} | max abs diff {abs:.4} (rel {rel:.2e}){}",
-                    pos0 + r,
-                    if ga == ra { "" } else { "  <-- MISMATCH" }
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Record prompt argmax rows and the final long-context attention selection.
-fn dump_prefill_chunk(
-    gpu: &qwen4_exp::gpu::Gpu<'_>,
-    engine: bool,
-    pos: usize,
-    rows: usize,
-    prompt_tokens: usize,
-    lines: &mut Vec<String>,
-) {
-    for row in 0..rows {
-        let logits = if engine {
-            gpu.pf_logits_row(row)
-        } else {
-            gpu.logits_row(row)
-        };
-        let token = argmax(logits);
-        lines.push(format!(
-            "{} {token} {:.4}",
-            pos + row,
-            logits[token as usize]
-        ));
-    }
-    let cfg = &gpu.p.cfg;
-    if pos + rows != prompt_tokens
-        || prompt_tokens <= cfg.indexer_budget + cfg.indexer_compress_ratio
-    {
-        return;
-    }
-    if engine {
-        let blocks = gpu.debug_engine_blocks(rows - 1);
-        eprintln!(
-            "engine last row: {} blocks selected, last 8 {:?}",
-            blocks.len(),
-            &blocks[blocks.len().saturating_sub(8)..]
-        );
-        return;
-    }
-    let vis = gpu.debug_row_vis(rows - 1);
-    let blocks: Vec<u32> = vis
-        .iter()
-        .filter(|&&t| t % 4 == 0)
-        .map(|&t| t / 4)
-        .collect();
-    eprintln!(
-        "row path last row: {} visible tokens, last 8 {:?}; {} block starts, last 8 {:?}",
-        vis.len(),
-        &vis[vis.len().saturating_sub(8)..],
-        blocks.len(),
-        &blocks[blocks.len().saturating_sub(8)..]
-    );
 }
 
 /// Stream equal-sized prompt chunks so a short tail does not reread the whole store.
@@ -310,7 +138,7 @@ fn prefill_engine(
     eprintln!(
         "prefill engine: {} chunk(s) of up to {pf_chunk}, {recs} expert records streamed ({:.1} GB, {:.0} MB/token), {:.1}s waiting for ring reuse | GPU s: DeltaNet blocks {:.1}, attention blocks {:.1}, expert streams {:.1}, MTP {:.1} | n-gram gather {:.1}s CPU",
         st.len(),
-        bytes as f64 / 1e9,
+        bytes as f64 / BYTES_PER_GB as f64,
         bytes as f64 / 1e6 / ids.len() as f64,
         sum(|s| s.wait_s),
         sum(|s| s.gpu_delta_s),
@@ -319,7 +147,11 @@ fn prefill_engine(
         sum(|s| s.gpu_mtp_s),
         sum(|s| s.ngram_s),
     );
-    Ok(PrefillResume { next: cur, drafts })
+    Ok(PrefillResume {
+        next: cur,
+        drafts,
+        logits: None,
+    })
 }
 
 /// Use the decode row kernels for short prompts and explicit row-path checks.
@@ -368,7 +200,11 @@ fn prefill_row_batches(
         p += n;
         cur = res[n - 1];
     }
-    Ok(PrefillResume { next: cur, drafts })
+    Ok(PrefillResume {
+        next: cur,
+        drafts,
+        logits: None,
+    })
 }
 
 /// Fill the trunk and draft caches, then return the next token and draft chain.
@@ -388,6 +224,7 @@ fn prefill_prompt(
     let mut seed = resume.unwrap_or_else(|| PrefillResume {
         next: ids[0],
         drafts: Vec::new(),
+        logits: None,
     });
     // Prompts from CHERENKOV_PREFILL_MIN tokens (default 64) go through
     // the prefill engine in adaptive chunks, overridden by
@@ -463,12 +300,12 @@ pub(crate) fn qwen4_exp_gen_once(
     options: &Options,
     resume: Option<PrefillResume>,
     emit: &mut dyn FnMut(u32) -> Result<()>,
-) -> Result<Generation> {
+) -> Result<()> {
     // Up to two drafts per step by default, the second only after a step
     // that accepted its whole batch (adaptive, below): a flat second
     // draft costs more than its extra tokens are worth under the
     // SSD-driven throttle, so the second draft is adaptive.
-    let n_draft = options.drafts as usize;
+    let n_draft = options.effective_drafts();
     anyhow::ensure!(
         n_draft == 0 || gpu.has_mtp(),
         "drafting needs the checkpoint's MTP head"
@@ -476,79 +313,20 @@ pub(crate) fn qwen4_exp_gen_once(
     // Always fold the first draft into the trunk command buffer: neutral
     // in measured speed, but saves one submit/wait. Chain adaptively after
     // fully accepted batches; this measured about 4% faster than always chaining.
-    let noeos = options.no_eos;
-    let is_eos = |t: u32| !noeos && (t == tok.im_end || t == tok.endoftext);
 
-    let PrefillResume {
-        next: mut cur,
-        mut drafts,
-    } = prefill_prompt(gpu, cpu, cpu_state.as_deref_mut(), ids, n_draft, resume)?;
-    let prefill_steps = gpu.step_ms.len();
-
-    // Decode: each step verifies [cur, drafts...] and commits the accepted
-    // prefix; the MTP head re-drafts from the committed rows.
-    let mut out = Vec::new();
-    let mut finish_reason = "length";
-    let t2 = std::time::Instant::now();
-    let mut steps = 0usize;
-    let mut accepted = 0usize;
-    'decode: loop {
-        if is_eos(cur) {
-            finish_reason = "stop";
-            break;
-        }
-        if out.len() >= max_tokens {
-            break;
-        }
-        out.push(cur);
-        emit(cur)?;
-        let mut rows = vec![cur];
-        rows.extend(drafts.iter().take(n_draft));
-        let nb = rows.len();
-        let pos0 = gpu.pos;
-        let res = gpu.step_rows(&rows, nb > 1, n_draft > 0)?;
-        let mut n = 1;
-        while n < nb && res[n - 1] == rows[n] {
-            n += 1;
-        }
-        gpu.commit(n)?;
-        steps += 1;
-        accepted += n - 1;
-        let mut next: Vec<u32> = rows[1..n].to_vec();
-        next.push(res[n - 1]);
-        if n_draft > 0 {
-            // Adaptive chain: a second draft only after a step that
-            // accepted its whole batch (the MTP is on a streak); the
-            // chained pass is a separate round trip.
-            let chain = if n_draft >= 2 && n < nb { 1 } else { n_draft };
-            drafts = gpu.mtp_draft(&next, chain)?;
-        }
-        if let (Some(m), Some(st)) = (cpu, cpu_state.as_deref_mut()) {
-            eprintln!();
-            qwen4_exp_check_rows(
-                m,
-                st,
-                gpu,
-                &rows[..n],
-                (n_draft > 0).then_some(&next[..]),
-                pos0,
-                "decode",
-                false,
-            )?;
-        }
-        for &t in &rows[1..n] {
-            if is_eos(t) {
-                finish_reason = "stop";
-                break 'decode;
-            }
-            if out.len() >= max_tokens {
-                break 'decode;
-            }
-            out.push(t);
-            emit(t)?;
-        }
-        cur = res[n - 1];
+    let mut seed = prefill_prompt(gpu, cpu, cpu_state.as_deref_mut(), ids, n_draft, resume)?;
+    if !options.sampling.greedy() && seed.logits.is_none() {
+        seed.logits = Some(gpu.logits_row(gpu.last_logits_row()).to_vec());
     }
+    let prefill_steps = gpu.step_ms.len();
+    let mut decoder = Decode::new(seed, ids, tok, options, max_tokens, None)?;
+    let t2 = std::time::Instant::now();
+    while decoder.finish_reason.is_none() {
+        decoder.step(gpu, cpu, cpu_state.as_deref_mut(), emit)?;
+    }
+    let steps = decoder.steps;
+    let accepted = decoder.accepted;
+    let out = decoder.tokens;
     let decode = t2.elapsed().as_secs_f64();
     let n = steps.max(1);
     let recent = |v: &[f64]| -> Vec<f64> { v[v.len().saturating_sub(n)..].to_vec() };
@@ -596,53 +374,14 @@ pub(crate) fn qwen4_exp_gen_once(
         gpu.allocated_gb()
     );
     dump_decode(gpu, ids, &out, prefill_steps)?;
-    Ok(Generation {
-        tokens: out,
-        prompt_tokens: ids.len(),
-        finish_reason,
-    })
-}
-
-fn dump_decode(
-    gpu: &qwen4_exp::gpu::Gpu<'_>,
-    ids: &[u32],
-    out: &[u32],
-    prefill_steps: usize,
-) -> Result<()> {
-    if let Ok(path) = std::env::var("CHERENKOV_DUMP_TOKENS") {
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&serde_json::json!({ "prompt": ids, "out": out }))?,
-        )?;
-        eprintln!("tokens written to {path}");
-    }
-    if std::env::var_os("CHERENKOV_TRACE").is_some() {
-        for i in prefill_steps..gpu.step_ms.len() {
-            eprintln!(
-                "  step {i}: {} rows, {:.1} ms wall, {:.1} ms gpu, {:.1} ms io wait, {} sync fetches ({:.0} MB), lookahead hit {:.2} fetched {}",
-                gpu.rows[i],
-                gpu.step_ms[i],
-                gpu.gpu_ms[i],
-                gpu.io_ms[i],
-                gpu.misses[i],
-                gpu.miss_bytes[i] as f64 / 1e6,
-                gpu.lookahead_hit[i],
-                gpu.lookahead_issued[i]
-            );
-        }
-    }
     Ok(())
 }
 
+#[derive(Default)]
 pub(crate) struct PrefillResume {
     pub next: u32,
     pub drafts: Vec<u32>,
-}
-
-pub(crate) struct Generation {
-    pub tokens: Vec<u32>,
-    pub prompt_tokens: usize,
-    pub finish_reason: &'static str,
+    pub logits: Option<Vec<f32>>,
 }
 
 pub(crate) fn check_budget(

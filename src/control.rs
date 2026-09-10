@@ -1,5 +1,6 @@
 //! Local control: one bounded JSON exchange per connection, authenticated by UID.
 
+use crate::units::BYTES_PER_KIB;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -27,7 +28,7 @@ pub enum Command {
     ConfigReload,
 }
 
-const MAX_FRAME: usize = 64 * 1024;
+const MAX_FRAME: usize = 64 * BYTES_PER_KIB;
 const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The deadline applies to the whole frame, even if a client dribbles bytes.
@@ -35,12 +36,9 @@ fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>> {
     let deadline = Instant::now() + TIMEOUT;
     let mut bytes = Vec::new();
     loop {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .context("control request timed out")?;
-        stream.set_read_timeout(Some(remaining))?;
-        let mut chunk = [0; 1024];
-        let n = stream.read(&mut chunk)?;
+        wait_readable(stream, deadline)?;
+        let mut chunk = [0; BYTES_PER_KIB];
+        let n = stream.read(&mut chunk).context("reading control frame")?;
         ensure!(n > 0, "incomplete control frame");
         let end = chunk[..n].iter().position(|&b| b == b'\n');
         bytes.extend_from_slice(&chunk[..end.unwrap_or(n)]);
@@ -51,12 +49,40 @@ fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>> {
     }
 }
 
+fn wait_readable(stream: &UnixStream, deadline: Instant) -> Result<()> {
+    // macOS rejects timeout changes after peer close, even with unread data.
+    // Poll also bounds the entire frame. This connection has only one reader.
+    let mut fd = libc::pollfd {
+        fd: stream.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .context("control request timed out")?;
+        // TIMEOUT is two seconds; round up to poll's millisecond precision.
+        let ready = unsafe { libc::poll(&mut fd, 1, remaining.as_millis() as i32 + 1) };
+        if ready > 0 {
+            return Ok(());
+        }
+        ensure!(ready != 0, "control request timed out");
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(error).context("polling control socket");
+    }
+}
+
 fn write_frame(stream: &mut UnixStream, value: &Value) -> Result<()> {
     let mut bytes = serde_json::to_vec(value)?;
     ensure!(bytes.len() <= MAX_FRAME, "control response exceeds 64 KiB");
     bytes.push(b'\n');
-    stream.set_write_timeout(Some(TIMEOUT))?;
-    stream.write_all(&bytes)?;
+    stream
+        .set_write_timeout(Some(TIMEOUT))
+        .context("setting control write timeout")?;
+    stream.write_all(&bytes).context("writing control frame")?;
     Ok(())
 }
 

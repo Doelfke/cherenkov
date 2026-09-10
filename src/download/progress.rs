@@ -1,5 +1,6 @@
 //! Keep long transfers visible without flooding stderr with per-chunk updates.
 
+use crate::units::BYTES_PER_GB;
 use hf_hub::progress::{DownloadEvent, ProgressEvent, ProgressHandler};
 use std::{
     sync::Mutex,
@@ -26,8 +27,8 @@ impl ProgressHandler for Reporter {
                 if last.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) {
                     eprintln!(
                         "download {:.2}/{:.2} GB",
-                        *bytes_completed as f64 / 1e9,
-                        *total_bytes as f64 / 1e9
+                        *bytes_completed as f64 / BYTES_PER_GB as f64,
+                        *total_bytes as f64 / BYTES_PER_GB as f64
                     );
                     *last = Some(Instant::now());
                 }

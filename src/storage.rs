@@ -1,5 +1,6 @@
 //! XDG locations and the durable model layout. Resolving paths never creates files.
 
+use crate::units::BYTES_PER_GB;
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use std::ffi::OsString;
@@ -119,8 +120,8 @@ pub(crate) fn require_space(path: &Path, additional_bytes: u64) -> Result<()> {
         free >= required,
         "{} needs {:.1} GB more disk space plus a 2 GB reserve; only {:.1} GB is available",
         path.display(),
-        additional_bytes as f64 / 1e9,
-        free as f64 / 1e9
+        additional_bytes as f64 / BYTES_PER_GB as f64,
+        free as f64 / BYTES_PER_GB as f64
     );
     Ok(())
 }

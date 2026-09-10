@@ -42,6 +42,7 @@ enum Smoke {
     All,
     Server,
     Control,
+    Sessions,
     Download,
 }
 
@@ -106,6 +107,7 @@ fn smoke(kind: Smoke, model: Option<PathBuf>, binary: Option<PathBuf>) -> Result
         Smoke::All => None,
         Smoke::Server => Some("server_smoke"),
         Smoke::Control => Some("control_smoke"),
+        Smoke::Sessions => Some("concurrency::"),
         Smoke::Download => Some("download_smoke"),
     };
     if let Some(name) = name {

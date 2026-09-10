@@ -1,6 +1,7 @@
 //! Small, bounded snapshots shared with the control thread. No prompts or logits.
 
 use crate::config::{Config, Source};
+use crate::units::BYTES_PER_GB;
 use anyhow::{Result, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -37,10 +38,30 @@ pub struct Stats {
     pub cache: CacheStats,
     pub memory: MemoryStats,
     pub http_address: Option<String>,
+    pub cancelled_requests: u64,
+    pub active_state_reserved_bytes: usize,
+    pub sessions: SessionStats,
+    pub active: Vec<ActiveRequest>,
+}
+
+#[derive(Default, Serialize)]
+pub struct SessionStats {
+    pub entries: usize,
+    pub bytes: usize,
+    pub evictions: u64,
+}
+
+#[derive(Serialize)]
+pub struct ActiveRequest {
+    pub id: String,
+    pub session_id: Option<String>,
+    pub phase: &'static str,
+    pub generated_tokens: usize,
 }
 
 #[derive(Serialize)]
 pub struct Current {
+    pub request_id: String,
     pub config_generation: u64,
     pub phase: &'static str,
     pub generated_tokens: u64,
@@ -108,40 +129,28 @@ impl State {
     }
 
     pub fn status(&self) -> Value {
+        let config = self.config();
         json!({"uptime_seconds": self.started.elapsed().as_secs_f64(),
             "stats": *self.stats.lock().unwrap(),
-            "capabilities": {"active_sequences": 1, "sampling": false, "retained_sessions": false}})
+            "capabilities": {"active_sequences": config.config.limits.active_requests,
+                "sampling": true, "retained_sessions": config.config.limits.max_sessions > 0, "cancellation": true}})
     }
 
-    pub fn begin(&self, generation: u64) {
+    pub fn begin(&self) {
         self.update(|s| {
             s.queued_requests -= 1;
-            s.active_requests = 1;
+            s.active_requests += 1;
+        });
+    }
+
+    pub fn current(&self, request_id: &str, generation: u64, phase: &'static str, tokens: usize) {
+        self.update(|s| {
             s.current = Some(Current {
+                request_id: request_id.to_owned(),
                 config_generation: generation,
-                phase: "validating",
-                generated_tokens: 0,
+                phase,
+                generated_tokens: tokens as u64,
             });
-        });
-    }
-
-    pub fn finish(&self, success: bool) {
-        self.update(|s| {
-            s.active_requests = 0;
-            s.current = None;
-            if success {
-                s.completed_requests += 1;
-            } else {
-                s.failed_requests += 1;
-            }
-        });
-    }
-
-    pub fn phase(&self, phase: &'static str) {
-        self.update(|s| {
-            if let Some(current) = &mut s.current {
-                current.phase = phase;
-            }
         });
     }
 
@@ -167,7 +176,7 @@ impl State {
                 evictions,
             };
             s.memory = MemoryStats {
-                metal_allocated_bytes_observed: (gpu.allocated_gb() * 1e9) as u64,
+                metal_allocated_bytes_observed: (gpu.allocated_gb() * BYTES_PER_GB as f64) as u64,
                 expert_pool_bytes: gpu.pool_bytes(),
                 resident_experts: gpu.pool_resident(),
                 observed_at_uptime_seconds: self.started.elapsed().as_secs_f64(),

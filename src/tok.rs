@@ -4,6 +4,7 @@ use tokenizers::Tokenizer;
 
 pub struct ChatTokenizer {
     pub inner: Tokenizer,
+    pub template: Option<crate::prompt::ChatTemplate>,
     pub im_end: u32,
     pub endoftext: u32,
 }
@@ -22,6 +23,7 @@ impl ChatTokenizer {
         let endoftext = tok("<|endoftext|>")?;
         Ok(ChatTokenizer {
             inner,
+            template: crate::prompt::ChatTemplate::load(model_dir)?,
             im_end,
             endoftext,
         })

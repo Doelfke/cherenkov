@@ -18,14 +18,21 @@ target/release/cherenkov pack
 target/release/cherenkov serve
 ```
 
-The `download` command fetches the supported
-[MLX 4-bit checkpoint](https://huggingface.co/Sawfwair/Qwen3.8-Flash-Next-MLX-4bit)
-from Hugging Face and caches it locally. The built-in packer rearranges
-its quantized weights into aligned records, preserving their bits.
-No Python or MLX runtime is required.
-Allow roughly 210 GB for the download and packed store. See
-[storage and downloads](docs/storage.md) for paths, `HF_TOKEN`, and local models.
-The upstream BF16 checkpoint still needs importer support.
+Cherenkov requires MLX affine 4-bit weights quantized in groups of 64,
+except for the 160-column n-gram table, which uses groups of 32. We tested
+[Sawfwair/Qwen3.8-Flash-Next-MLX-4bit](https://huggingface.co/Sawfwair/Qwen3.8-Flash-Next-MLX-4bit/tree/6cc9bbc0fae9ce26b7670b3ed1e26d557c154506)
+at revision `6cc9bbc0`. The `download` command fetches this revision from
+Hugging Face and caches it locally.
+
+> [!IMPORTANT]
+> The
+> [mlx-community conversion](https://huggingface.co/mlx-community/Qwen3.8-Flash-Next-4bit/blob/main/config.json)
+> uses groups of 32 for the main weights, so Cherenkov cannot load it.
+
+The built-in packer rearranges the quantized weights into aligned records,
+preserving their bits. No Python or MLX runtime is required. Allow roughly
+210 GB for the download and packed store. See [storage and downloads](docs/storage.md)
+for paths, `HF_TOKEN`, and local models.
 
 ## Benchmarks
 
@@ -93,9 +100,11 @@ and [current validation](docs/validation.md).
 
 **Server:** `serve` keeps the model loaded and caches repeated prompt prefixes.
 Connect an OpenAI-compatible client to `http://127.0.0.1:8080/v1` with model
-`cherenkov` and temperature `0`. Chat and text completions support streaming;
-generation runs one request at a time. Chat currently uses a non-thinking
-wrapper; native reasoning-effort controls are not implemented.
+`cherenkov`. Chat and text completions support streaming and sampling.
+The server interleaves up to two active requests by default, with cancellation
+and optional retained sessions. Chat renders the checkpoint's Jinja template
+with thinking disabled. Reasoning-effort controls are not exposed yet.
+See the [HTTP API](docs/running.md).
 
 **CLI:** pass a model directory and prompt to generate directly.
 
@@ -115,6 +124,8 @@ The default is **4-bit experts with two adaptive speculative drafts**.
 | `--experts 4\|3\|2` | Routed-expert precision in prefill and decode. Lower precision trades accuracy for speed. |
 | `--miss-experts 2` | Fetch new misses at 2-bit in Q4 mode. |
 | `--drafts N` | Speculative drafts, 0–3; `0` disables speculation. |
+| `--temperature T` | Sampling temperature; default `0` is greedy. Sampling disables MTP verification. |
+| `--top-k K`, `--top-p P`, `--seed N` | Filter and seed sampling; defaults are unfiltered and unseeded. |
 | `--max-tokens N` | Maximum generated tokens; default 64. |
 | `--max-ctx N` | Context capacity; default 2,048. Larger contexts leave less memory for experts. |
 | `--pool-gb N` | Expert-pool memory budget; adaptive by default. |

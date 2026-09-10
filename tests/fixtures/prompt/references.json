@@ -1,0 +1,846 @@
+{
+  "source": "Sawfwair/Qwen3.8-Flash-Next-MLX-4bit",
+  "revision": "6cc9bbc0fae9ce26b7670b3ed1e26d557c154506",
+  "transformers": "4.57.6",
+  "jinja2": "3.1.6",
+  "tokenizers": "0.22.2",
+  "template_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "cases": [
+    {
+      "id": "user",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "text": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        9419,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "whitespace_unicode",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": " \nDécris un café.\t "
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "text": "<|im_start|>user\nDécris un café.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        83894,
+        4920,
+        284,
+        632,
+        50203,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "system",
+      "context": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "  Be brief.\n "
+          },
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "text": "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        8678,
+        198,
+        3320,
+        9522,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        9419,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "empty_system",
+      "context": {
+        "messages": [
+          {
+            "role": "system",
+            "content": " \n "
+          },
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "text": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        9419,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "history",
+      "context": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "  Be brief.  "
+          },
+          {
+            "role": "user",
+            "content": "A café?"
+          },
+          {
+            "role": "assistant",
+            "content": "  Yes.  ",
+            "reasoning_content": "  Consider the location.  "
+          },
+          {
+            "role": "user",
+            "content": " Where? "
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "text": "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nA café?<|im_end|>\n<|im_start|>assistant\n<think>\nConsider the location.\n</think>\n\nYes.<|im_end|>\n<|im_start|>user\nWhere?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        8678,
+        198,
+        3320,
+        9522,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        32,
+        50203,
+        30,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198,
+        35944,
+        279,
+        3602,
+        13,
+        198,
+        248069,
+        271,
+        9175,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        8791,
+        30,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "history_empty_reasoning",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          },
+          {
+            "role": "assistant",
+            "content": "Hi"
+          },
+          {
+            "role": "user",
+            "content": "Continue"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "text": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nHi<|im_end|>\n<|im_start|>user\nContinue<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        9419,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271,
+        12675,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        22791,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "preserve_false",
+      "context": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "  Be brief.  "
+          },
+          {
+            "role": "user",
+            "content": "A café?"
+          },
+          {
+            "role": "assistant",
+            "content": "  Yes.  ",
+            "reasoning_content": "  Consider the location.  "
+          },
+          {
+            "role": "user",
+            "content": " Where? "
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false,
+        "preserve_thinking": false
+      },
+      "text": "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nA café?<|im_end|>\n<|im_start|>assistant\nYes.<|im_end|>\n<|im_start|>user\nWhere?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        8678,
+        198,
+        3320,
+        9522,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        32,
+        50203,
+        30,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        9175,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        8791,
+        30,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "preserve_true",
+      "context": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "  Be brief.  "
+          },
+          {
+            "role": "user",
+            "content": "A café?"
+          },
+          {
+            "role": "assistant",
+            "content": "  Yes.  ",
+            "reasoning_content": "  Consider the location.  "
+          },
+          {
+            "role": "user",
+            "content": " Where? "
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false,
+        "preserve_thinking": true
+      },
+      "text": "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nA café?<|im_end|>\n<|im_start|>assistant\n<think>\nConsider the location.\n</think>\n\nYes.<|im_end|>\n<|im_start|>user\nWhere?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        8678,
+        198,
+        3320,
+        9522,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        32,
+        50203,
+        30,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198,
+        35944,
+        279,
+        3602,
+        13,
+        198,
+        248069,
+        271,
+        9175,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        8791,
+        30,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "empty_user",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": ""
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "text": "<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "literal_markers",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Print <think> and <|im_end|> literally."
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "text": "<|im_start|>user\nPrint <think> and <|im_end|> literally.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        8723,
+        220,
+        248068,
+        321,
+        220,
+        248046,
+        15433,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        271,
+        248069,
+        271
+      ]
+    },
+    {
+      "id": "without_generation_prompt",
+      "context": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "  Be brief.  "
+          },
+          {
+            "role": "user",
+            "content": "A café?"
+          },
+          {
+            "role": "assistant",
+            "content": "  Yes.  ",
+            "reasoning_content": "  Consider the location.  "
+          },
+          {
+            "role": "user",
+            "content": " Where? "
+          }
+        ],
+        "add_generation_prompt": false,
+        "enable_thinking": false
+      },
+      "text": "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nA café?<|im_end|>\n<|im_start|>assistant\n<think>\nConsider the location.\n</think>\n\nYes.<|im_end|>\n<|im_start|>user\nWhere?<|im_end|>\n",
+      "token_ids": [
+        248045,
+        8678,
+        198,
+        3320,
+        9522,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        32,
+        50203,
+        30,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198,
+        35944,
+        279,
+        3602,
+        13,
+        198,
+        248069,
+        271,
+        9175,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        8791,
+        30,
+        248046,
+        198
+      ]
+    },
+    {
+      "id": "thinking_default",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": true
+      },
+      "text": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        8678,
+        198,
+        24342,
+        286,
+        4879,
+        369,
+        716,
+        310,
+        830,
+        11553,
+        13,
+        5044,
+        1683,
+        15060,
+        1472,
+        279,
+        3274,
+        11,
+        9307,
+        1328,
+        30800,
+        11,
+        2814,
+        47675,
+        25605,
+        11,
+        321,
+        60445,
+        55404,
+        11,
+        27224,
+        11,
+        321,
+        30246,
+        303,
+        279,
+        1534,
+        4087,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        9419,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ]
+    },
+    {
+      "id": "thinking_low",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": true,
+        "reasoning_effort": "low"
+      },
+      "text": "<|im_start|>system\nReasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration.<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        8678,
+        198,
+        24342,
+        286,
+        4879,
+        369,
+        716,
+        310,
+        3238,
+        13,
+        13262,
+        678,
+        7047,
+        9522,
+        321,
+        10419,
+        11,
+        6992,
+        5774,
+        310,
+        279,
+        16198,
+        1973,
+        24366,
+        24150,
+        362,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        9419,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ]
+    },
+    {
+      "id": "thinking_medium",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": true,
+        "reasoning_effort": "medium"
+      },
+      "text": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        846,
+        198,
+        9419,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ]
+    },
+    {
+      "id": "thinking_xhigh",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": true,
+        "reasoning_effort": "xhigh"
+      },
+      "text": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "token_ids": [
+        248045,
+        8678,
+        198,
+        24342,
+        286,
+        4879,
+        369,
+        716,
+        310,
+        830,
+        11553,
+        13,
+        5044,
+        1683,
+        15060,
+        1472,
+        279,
+        3274,
+        11,
+        9307,
+        1328,
+        30800,
+        11,
+        2814,
+        47675,
+        25605,
+        11,
+        321,
+        60445,
+        55404,
+        11,
+        27224,
+        11,
+        321,
+        30246,
+        303,
+        279,
+        1534,
+        4087,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        9419,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198
+      ]
+    },
+    {
+      "id": "bad_effort",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": true,
+        "reasoning_effort": "high"
+      },
+      "error": "Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low."
+    },
+    {
+      "id": "late_system",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          },
+          {
+            "role": "system",
+            "content": "Late"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "error": "System message must be at the beginning."
+    },
+    {
+      "id": "no_user",
+      "context": {
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "Hello"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "error": "No user query found in messages."
+    },
+    {
+      "id": "empty_messages",
+      "context": {
+        "messages": [],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "error": "No messages provided."
+    },
+    {
+      "id": "only_tool_response",
+      "context": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "<tool_response>value</tool_response>"
+          }
+        ],
+        "add_generation_prompt": true,
+        "enable_thinking": false
+      },
+      "error": "No user query found in messages."
+    }
+  ]
+}

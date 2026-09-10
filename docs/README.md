@@ -6,7 +6,8 @@
 - [Engine](engine.md): model execution, expert streaming and synchronization.
 - [Developer options](developer-options.md): diagnostic environment variables.
 - [Validation](validation.md): tests, linters and known limitations.
-- [Serving design](serving-design.md): planned sampling and multi-session work.
+- [Serving design](serving-design.md): sampling, session ownership and
+  scheduling boundaries.
 - [Benchmarks](../benchmarks/README.md): suite, reports and pelicans.
 - [Saved results](../results/README.md): measurements and generated answers.
 
@@ -15,6 +16,8 @@
 | Directory | Contents |
 | --- | --- |
 | `src/` | CLI, server, storage and shared runtime support |
+| `src/server/` | HTTP framing, routes, request policy, scheduling, sessions and output |
+| `src/runner/` | Resumable decoding and optional diagnostics |
 | `src/qwen4_exp/` | Model config, packer, CPU reference and GPU execution |
 | `kernels/` | Metal fragments grouped by common primitives and model subsystem |
 | `tests/unit/` | Engine child-module tests, mirroring the source hierarchy |

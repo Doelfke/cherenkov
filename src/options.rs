@@ -90,6 +90,8 @@ pub(crate) fn cut(s: &str) -> std::result::Result<f32, String> {
 /// Measured user choices; developer diagnostics remain environment-only.
 #[derive(Args, Debug, Clone)]
 pub struct Options {
+    #[command(flatten)]
+    pub sampling: crate::sampling::Sampling,
     /// Expert precision: 4, 3 or 2 bits
     #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u32).range(2..=4))]
     pub experts: u32,
@@ -139,6 +141,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            sampling: crate::sampling::Sampling::default(),
             experts: 4,
             miss_experts: None,
             cut_weak: 0.0,
@@ -157,11 +160,20 @@ impl Default for Options {
 }
 
 impl Options {
+    pub fn effective_drafts(&self) -> usize {
+        if self.sampling.greedy() {
+            self.drafts as usize
+        } else {
+            0
+        }
+    }
+
     pub fn miss_bits(&self) -> u32 {
         self.miss_experts.unwrap_or(self.experts)
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.sampling.validate()?;
         ensure!(
             (2..=4).contains(&self.experts) && (2..=4).contains(&self.miss_bits()),
             "expert precision must be 4, 3 or 2"

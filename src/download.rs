@@ -1,5 +1,6 @@
 //! Pinned Hugging Face downloads. The Hub client handles retries, locking and Xet transfers.
 
+use crate::units::{BYTES_PER_GB, BYTES_PER_MIB};
 use crate::{
     qwen4_exp::Qwen4ExpConfig,
     storage::{self, Paths},
@@ -82,7 +83,7 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
     );
     for name in &files {
         ensure!(
-            available[name] <= 64 * 1024 * 1024,
+            available[name] <= 64 * BYTES_PER_MIB as u64,
             "metadata file {name} exceeds 64 MiB"
         );
     }
@@ -111,7 +112,7 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
     eprintln!(
         "{} selected files, {:.2} GB not yet cached",
         files.len(),
-        needed as f64 / 1e9
+        needed as f64 / BYTES_PER_GB as f64
     );
     let snapshot = repo
         .snapshot_download()
