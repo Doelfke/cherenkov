@@ -438,8 +438,8 @@ impl Pool {
 
 pub struct CopyPool {
     pool: Buf,
-    /// Keeps the pool resident for the queue: the GPU reaches it through
-    /// addresses, never a binding.
+    /// This set keeps the pool resident for the queue. The GPU reaches it
+    /// through addresses rather than a binding.
     _set: Retained<ProtocolObject<dyn MTLResidencySet>>,
     base: usize,
     gpu_base: u64,
@@ -629,10 +629,10 @@ impl Residency {
         Ok(self.buf(ctx, rid)?.gpuAddress())
     }
 
-    /// Mark records used this step and reserve set membership for them:
-    /// evicts least recently used members not used this step as needed.
-    /// Returns the records that still have to be read and added
-    /// (`finish` after their pages are in memory).
+    /// This method reserves membership for the step's records, evicting the
+    /// least recently used members outside the step as needed. It returns
+    /// records that still need to be read and added. Call `finish` once their
+    /// pages are in memory.
     pub fn acquire(&mut self, ctx: &MetalContext, rids: &[usize], step: u64) -> Result<Vec<usize>> {
         let mut need = Vec::new();
 

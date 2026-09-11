@@ -15,4 +15,4 @@ a stable name. Smoke checks write `results/*-smoke.json`.
 New results are ignored by Git. The baselines above are already tracked;
 use `git add -f results/<name>` to save another reviewed run. Reports keep
 relative output/image links, so each run directory can be moved as a unit.
-Original invocation paths in provenance remain as recorded.
+The saved baselines replace machine-specific invocation paths with placeholders.

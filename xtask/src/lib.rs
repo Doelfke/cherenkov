@@ -2,6 +2,7 @@
 
 pub mod bench;
 pub mod capture;
+pub mod docs;
 pub mod metrics;
 pub mod prefill;
 pub mod readme;

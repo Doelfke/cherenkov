@@ -166,6 +166,12 @@ fn invalid_samples_do_not_enter_reports() -> Result<()> {
     assert!(html.contains("8.00</td>"));
     assert!(!html.contains("{{"));
 
+    let saved = format!("{}\n", serde_json::to_string(&data)?);
+
+    fs::write(out.path().join("report.json"), &saved)?;
+    report::regenerate(out.path(), &data)?;
+    assert_eq!(fs::read_to_string(out.path().join("report.json"))?, saved);
+
     Ok(())
 }
 
@@ -198,17 +204,24 @@ fn mixed_prefill_does_not_change_q4_controls() -> Result<()> {
     invalid["metrics"]["pp_s"] = json!(999);
 
     runs.push(invalid);
-    prefill::write_summary(
-        out.path(),
-        &json!({"runs":runs,"prompts":{"short":"test"},"notes":[]}),
-    )?;
 
-    let summary = fs::read_to_string(out.path().join("README.md"))?;
+    let observations = "# Run observations\n\nThese observations belong to the author.\n";
+
+    fs::write(out.path().join("README.md"), observations)?;
+    prefill::write_summary(out.path(), &json!({"runs":runs,"prompts":{"short":"test"}}))?;
+
+    let summary = fs::read_to_string(out.path().join("summary.md"))?;
+
+    assert_eq!(
+        fs::read_to_string(out.path().join("README.md"))?,
+        observations
+    );
+    assert!(summary.contains("[Run observations](README.md)"));
 
     assert!(summary.contains("| 121 | 4 | 20.0 | 20.0 | +0.0% | 1 |"));
     assert!(summary.contains("| 121 | 4 / 2 | 100.0 | 150.0 | +50.0% | 1 |"));
-    assert_eq!(summary.matches("Q4 output identical").count(), 1);
-    assert!(!summary.contains("DIFFERS"));
+    assert_eq!(summary.matches("the Q4 outputs are identical").count(), 1);
+    assert!(!summary.contains("the Q4 outputs differ"));
 
     Ok(())
 }
@@ -235,6 +248,23 @@ fn all_saved_reports_render_and_keep_sample_counts() -> Result<()> {
 
     assert_eq!(html.matches("<img ").count(), 4);
     assert!(!html.contains("<svg"));
+
+    let summary = fs::read_to_string(out.path().join("summary.md"))?;
+
+    assert_eq!(summary.matches("![Pelican]").count(), 4);
+    assert!(summary.contains("## Pelicans\n"));
+    assert!(summary.contains("## Answers\n"));
+    assert!(!summary.contains("gallery.html"));
+    assert!(!summary.contains("https://"));
+
+    for run in report["runs"].as_array().unwrap() {
+        let output = run["output"].as_str().unwrap();
+
+        assert!(
+            summary.contains(&format!("]({output})")),
+            "missing {output}"
+        );
+    }
 
     Ok(())
 }

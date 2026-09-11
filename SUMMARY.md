@@ -1,0 +1,22 @@
+# Summary
+
+[Cherenkov](README.md)
+
+- [Documentation](docs/README.md)
+  - [Running](docs/running.md)
+  - [Server configuration](docs/server-config.md)
+  - [Storage](docs/storage.md)
+  - [Engine](docs/engine.md)
+  - [Metal kernels](kernels/README.md)
+  - [Developer options](docs/developer-options.md)
+  - [Validation](docs/validation.md)
+  - [Prompt fixtures](tests/fixtures/prompt/README.md)
+  - [Serving design](docs/serving-design.md)
+- [Benchmarks](benchmarks/README.md)
+- [Saved results](results/README.md)
+  - [Baseline](results/baseline-2026-09-09/README.md)
+    - [Timings and pelicans](results/baseline-2026-09-09/summary.md)
+  - [Low-bit prefill](results/prefill-lowbit-2026-09-09/README.md)
+    - [Timings and output checks](results/prefill-lowbit-2026-09-09/summary.md)
+  - [Mixed prefill](results/prefill-mixed-2026-09-09/README.md)
+    - [Timings](results/prefill-mixed-2026-09-09/summary.md)

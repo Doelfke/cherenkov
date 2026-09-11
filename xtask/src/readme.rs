@@ -1,4 +1,5 @@
 //! Static README tables and images, generated from a saved benchmark report.
+use crate::report::markdown::{cell, drawings, label, link};
 use crate::{report, util};
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
@@ -6,32 +7,6 @@ use std::{fmt::Write as _, fs, path::Path};
 
 const START: &str = "<!-- benchmarks:start -->";
 const END: &str = "<!-- benchmarks:end -->";
-
-fn cell(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('|', "&#124;")
-        .replace(['\n', '\r'], " ")
-}
-
-fn link(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('%', "%25")
-        .replace(' ', "%20")
-        .replace('#', "%23")
-        .replace('(', "%28")
-        .replace(')', "%29")
-}
-
-fn label(config: &Value) -> &str {
-    if config["id"] == "misses-2bit" {
-        return "4-bit / 2-bit misses + cut";
-    }
-
-    report::text(&config["label"])
-}
 
 fn table(data: &Value, rows: &[Value], kind: &str, metric: &str) -> Result<String> {
     let cases: Vec<_> = data["cases"]
@@ -81,55 +56,6 @@ fn table(data: &Value, rows: &[Value], kind: &str, metric: &str) -> Result<Strin
     Ok(text)
 }
 
-fn drawings(data: &Value, directory: &Path) -> Result<String> {
-    let runs = data["runs"].as_array().context("runs")?;
-    let mut images = Vec::new();
-
-    for config in data["configurations"]
-        .as_array()
-        .context("configurations")?
-    {
-        let run = runs.iter().rev().find(|r| {
-            r["configuration"] == config["id"] && r["status"] == "ok" && r["svg"].is_string()
-        });
-        let Some(run) = run else {
-            continue;
-        };
-        let title = cell(label(config));
-        let path = link(&directory.join(run["svg"].as_str().unwrap()));
-
-        images.push((title, format!("![Pelican]({path})")));
-    }
-
-    let mut text = String::new();
-
-    if !images.is_empty() {
-        text.push_str("### Pelicans\n\nUnedited model outputs from the same run.\n\n");
-    }
-
-    for pair in images.chunks(2) {
-        writeln!(
-            text,
-            "| {} |",
-            pair.iter()
-                .map(|p| p.0.as_str())
-                .collect::<Vec<_>>()
-                .join(" | ")
-        )?;
-        writeln!(text, "| {} |", vec!["---"; pair.len()].join(" | "))?;
-        writeln!(
-            text,
-            "| {} |\n",
-            pair.iter()
-                .map(|p| p.1.as_str())
-                .collect::<Vec<_>>()
-                .join(" | ")
-        )?;
-    }
-
-    Ok(text)
-}
-
 pub fn render(data: &Value, directory: &Path) -> Result<String> {
     ensure!(
         data["utc_finished"].is_string(),
@@ -154,24 +80,29 @@ pub fn render(data: &Value, directory: &Path) -> Result<String> {
         .filter_map(|r| r["metal_gb"].as_f64())
         .fold(0.0, f64::max);
     let report_link = link(&directory.join("report.json"));
-    let gallery_link = link(&directory.join("gallery.html"));
+    let summary_link = link(&directory.join("summary.md"));
     let mut text = format!(
-        "Measured on {} with {memory:.0} GiB memory; {metal:.2} GB reported Metal allocation.\nSaved revision `{}`; {valid} valid samples.\n\nLoading and store construction are excluded. Answer lengths vary;\ncompare completion times in the full report.\n\n[Full report]({report_link}).\n\n",
+        "The benchmark ran on {} hardware with {memory:.0} GiB of memory.\nThe engine reported {metal:.2} GB of Metal allocations.\nThe report contains {valid} valid samples from revision `{}`.\n\nThe inference rates exclude loading and store construction. Answer lengths vary,\nso compare completion times in the full report.\n\n[Full report]({report_link}).\n\n",
         cell(report::text(&provenance["hardware"])),
         cell(commit.get(..7).unwrap_or(commit)),
     );
 
     text.push_str(&table(data, &rows, "decode", "tg/s")?);
     text.push_str(&table(data, &rows, "prefill", "pp/s")?);
-    text.push_str("Lower precision changes outputs. Measurements belong to the saved revision;\nsee current validation for subsequent changes. Metal allocation is reported\nafter prefill scratch release, not at its transient peak.\n\n");
-    append_notes(&mut text, data)?;
-    writeln!(text, "[All timings and outputs]({gallery_link}).\n")?;
-    text.push_str(&drawings(data, directory)?);
+    append_cut_warning(&mut text, data)?;
+    writeln!(text, "[All timings and outputs]({summary_link}).\n")?;
+
+    let pelicans = drawings(data, directory)?;
+
+    if !pelicans.is_empty() {
+        text.push_str("### Pelicans\n\nThese are unedited model outputs from the benchmark.\n\n");
+        text.push_str(&pelicans);
+    }
 
     Ok(text)
 }
 
-fn append_notes(text: &mut String, data: &Value) -> Result<()> {
+fn append_cut_warning(text: &mut String, data: &Value) -> Result<()> {
     let configs = data["configurations"]
         .as_array()
         .context("configurations")?;
@@ -190,12 +121,6 @@ fn append_notes(text: &mut String, data: &Value) -> Result<()> {
 
     if cut {
         text.push_str("Settings with a deadline cut are not reproducible.\n\n");
-    }
-
-    if let Some(notes) = data["readme_notes"].as_array() {
-        for note in notes {
-            writeln!(text, "{}\n", report::text(note))?;
-        }
     }
 
     Ok(())

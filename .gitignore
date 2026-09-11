@@ -1,4 +1,5 @@
 /target/
+/_site/
 # Keep local measurements out of Git; curated reports are already tracked.
 /results/
 # Local downloads, packed weights, and portable-root configuration.

@@ -1,13 +1,14 @@
 # Cherenkov
 
-A fast Rust and Metal inference engine for experimental Qwen4 MoE models
+Cherenkov is a Rust and Metal inference engine for experimental Qwen4 MoE models
 (`qwen4_exp`) on memory-constrained Apple devices. It runs from the 4-bit
 quantized checkpoint, streaming experts from SSD into a bounded GPU cache.
-Tested on a 32 GB M4 MacBook Air at about 21 GB of Metal allocations.
+The saved benchmark ran on a 32 GB M4 MacBook Air and used about 21 GB
+of Metal allocations.
 
 ## Get started
 
-Runs on Apple Silicon and macOS. To build from source, install the Xcode
+Cherenkov runs on Apple Silicon and macOS. To build from source, install the Xcode
 command-line tools and [Mise](https://mise.jdx.dev/).
 
 ```sh
@@ -38,11 +39,12 @@ for paths, `HF_TOKEN`, and local models.
 
 <!-- benchmarks:start -->
 
-Measured on Apple M4 with 32 GiB memory; 20.98 GB reported Metal allocation.
-Saved revision `93c514f`; 80 valid samples.
+The benchmark ran on Apple M4 hardware with 32 GiB of memory.
+The engine reported 20.98 GB of Metal allocations.
+The report contains 80 valid samples from revision `93c514f`.
 
-Loading and store construction are excluded. Answer lengths vary;
-compare completion times in the full report.
+The inference rates exclude loading and store construction. Answer lengths vary,
+so compare completion times in the full report.
 
 [Full report](results/baseline-2026-09-09/report.json).
 
@@ -60,20 +62,13 @@ compare completion times in the full report.
 | 3-bit | 75.80 |
 | 2-bit | 78.90 |
 
-Lower precision changes outputs. Measurements belong to the saved revision;
-see current validation for subsequent changes. Metal allocation is reported
-after prefill scratch release, not at its transient peak.
-
 Settings with a deadline cut are not reproducible.
 
-This baseline used Q4 batched prefill in every expert mode. Later
-prefill changes are measured separately.
-
-[All timings and outputs](results/baseline-2026-09-09/gallery.html).
+[All timings and outputs](results/baseline-2026-09-09/summary.md).
 
 ### Pelicans
 
-Unedited model outputs from the same run.
+These are unedited model outputs from the benchmark.
 
 | 4-bit | 4-bit / 2-bit misses + cut |
 | --- | --- |

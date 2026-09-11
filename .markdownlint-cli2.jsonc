@@ -1,6 +1,6 @@
 {
   "globs": ["**/*.md"],
-  "ignores": ["target/**", "node_modules/**"],
+  "ignores": ["target/**", "node_modules/**", "_site/**"],
   "config": {
     "default": true,
     // Wrap prose, but keep commands and Markdown table rows intact.

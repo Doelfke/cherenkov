@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::{fmt::Write as _, fs, path::Path};
 
+pub(crate) mod markdown;
+
 pub fn median(mut values: Vec<f64>) -> f64 {
     values.sort_by(f64::total_cmp);
 
@@ -119,9 +121,13 @@ fn config_label(config: &Value) -> &str {
 pub fn write(out: &Path, report: &Value) -> Result<()> {
     util::write_json(&out.join("report.json"), report)?;
 
+    regenerate(out, report)
+}
+
+pub fn regenerate(out: &Path, report: &Value) -> Result<()> {
     let rows = rows(report)?;
     let mut summary = format!(
-        "# Cherenkov benchmark\n\nSource commit: `{}`\n\nFresh processes; configurations interleaved and rotated. Loading and conversion\nare excluded from pp/s and tg/s. Medians include only complete, valid samples.\n\n| Case | Configuration | Runs | Output tokens | Decode s | Load s | pp/s | tg/s | Metal GB |\n| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n",
+        "# Cherenkov benchmark\n\nSource commit: `{}`\n\n| Case | Configuration | Runs | Output tokens | Decode s | Load s | pp/s | tg/s | Metal GB |\n| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n",
         text(&report["provenance"]["commit"])
     );
 
@@ -141,15 +147,29 @@ pub fn write(out: &Path, report: &Value) -> Result<()> {
         )?;
     }
 
-    summary.push_str("\nOutput lengths differ: compare completion times alongside token rates.\nCompletion means EOS; generated answers are not graded for correctness.\nThe mixed 4/2-bit setting includes a timing-dependent deadline cut.\nSVG generation rates are separate from other completion workloads.\nMetal memory is reported after prefill scratch release, not its transient peak.\nPower is sampled at process boundaries and every 30 seconds; shorter changes\ncan be missed. Low-bit construction belongs to load time.\n\n[Pelican gallery](gallery.html). Full text is in `outputs/`; SVGs in `pelicans/`.\n");
-    append_notes(&mut summary, report)?;
+    if out.join("README.md").is_file() {
+        summary.push_str("\n[Run observations](README.md).\n");
+    }
+
+    append_failures(&mut summary, report)?;
+
+    let pelicans = markdown::drawings(report, Path::new(""))?;
+
+    if !pelicans.is_empty() {
+        summary
+            .push_str("\n## Pelicans\n\nThese are unedited model outputs from the benchmark.\n\n");
+        summary.push_str(pelicans.trim_end());
+        summary.push('\n');
+    }
+
+    summary.push_str(&markdown::answers(report)?);
     fs::write(out.join("summary.md"), summary)?;
     fs::write(out.join("gallery.html"), gallery(report, &rows)?)?;
 
     Ok(())
 }
 
-fn append_notes(summary: &mut String, report: &Value) -> Result<()> {
+fn append_failures(summary: &mut String, report: &Value) -> Result<()> {
     let bad: Vec<_> = report["runs"]
         .as_array()
         .context("report runs")?
@@ -167,14 +187,6 @@ fn append_notes(summary: &mut String, report: &Value) -> Result<()> {
                 text(&r["id"]),
                 r["error"].as_str().unwrap_or(text(&r["status"]))
             )?;
-        }
-    }
-
-    if let Some(notes) = report["notes"].as_array() {
-        summary.push_str("\n## Run notes\n\n");
-
-        for note in notes {
-            writeln!(summary, "- {}", text(note))?;
         }
     }
 
@@ -304,7 +316,7 @@ fn cards(report: &Value) -> Result<String> {
             if let Some(run) = run {
                 card_body(&mut cards, run)?;
             } else {
-                cards.push_str("<p>Queued. Drawings run after timing workloads.</p>");
+                cards.push_str("<p>The drawing is queued after the timing workloads.</p>");
             }
 
             cards.push_str("</article>");
@@ -333,7 +345,7 @@ fn card_body(card: &mut String, run: &Value) -> Result<()> {
     } else {
         write!(
             card,
-            "<p>No completed SVG: {}</p>",
+            "<p>The run produced no completed SVG: {}</p>",
             escape(run["error"].as_str().unwrap_or(text(&run["status"])))
         )?;
     }
@@ -368,7 +380,7 @@ fn progress(report: &Value) -> Result<String> {
     let drawings = runs.iter().filter(|r| r["svg"].is_string()).count();
 
     Ok(format!(
-        "{valid} of {planned} samples valid; {drawings} drawings available."
+        "The run has {valid} of {planned} valid samples and {drawings} drawings."
     ))
 }
 

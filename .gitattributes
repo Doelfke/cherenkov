@@ -1,0 +1,9 @@
+# Files published by cargo xtask docs. Paths stay relative to the repository.
+*.md site
+/docs/**/*.txt site
+/benchmarks/**/*.json site
+/results/**/*.svg site
+/results/**/*.txt site
+/results/**/*.json site
+/LICENSE site
+/cherenkov.example.toml site

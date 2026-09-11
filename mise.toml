@@ -3,6 +3,11 @@ rust = { version = "1.98.1", profile = "minimal", components = ["clippy", "rustf
 node = "22.22.0"
 "npm:markdownlint-cli2" = "0.23.2"
 "cargo:styling-lint" = "0.1.0"
+"github:rust-lang/mdBook" = "0.5.4"
+
+[tasks.docs]
+description = "Build the documentation and galleries in _site"
+run = "cargo xtask docs"
 
 [tasks.fmt]
 description = "Format Rust source"
