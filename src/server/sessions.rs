@@ -1,6 +1,8 @@
 //! Bounded conversation history, committed at the final-response publication boundary.
 
-use super::{UsageStats, failure::Failure, registry, request::SessionInput, tool_call::WireToolCall};
+use super::{
+    UsageStats, failure::Failure, registry, request::SessionInput, tool_call::WireToolCall,
+};
 use crate::units::BYTES_PER_MIB;
 use crate::{config::Config, sampling::Sampling};
 use anyhow::{Context, Result, ensure};
@@ -294,6 +296,7 @@ impl Turn {
             if text.is_empty() {
                 message["content"] = Value::Null;
             }
+
             message["tool_calls"] = Value::Array(
                 calls
                     .iter()

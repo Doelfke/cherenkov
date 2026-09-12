@@ -132,6 +132,7 @@ impl<'a, W: Write> Response<'a, W> {
                         if text.is_empty() {
                             message["content"] = Value::Null;
                         }
+
                         message["tool_calls"] = Value::Array(
                             calls
                                 .iter()

@@ -202,6 +202,7 @@ impl ToolCallOutputContract {
             if let Some(existing) = contract.tools.iter_mut().find(|t| t.name == tool.name) {
                 if existing.unambiguous && !same_tool(existing, &tool) {
                     existing.parameters.clear();
+
                     existing.unambiguous = false;
                 }
             } else {
@@ -429,6 +430,7 @@ fn normalize_declared_parameter(encoded_value: &str, types: u8) -> (Disposition,
         } else {
             Disposition::SchemaMismatch
         };
+
         return (disposition, value.to_owned());
     }
 
@@ -549,6 +551,7 @@ fn normalize_raw_tool_call(
 
         if normalized.0 == Disposition::Omitted {
             diagnostics.empty_arguments_omitted += 1;
+
             continue;
         }
 
@@ -621,6 +624,7 @@ impl<'a> RegionParser<'a> {
 
             if failure == FallbackReason::None {
                 calls.push(call);
+
                 continue;
             }
 
@@ -637,6 +641,7 @@ impl<'a> RegionParser<'a> {
             // recovered call.
             if failure == FallbackReason::TruncatedTail && calls.is_empty() {
                 calls.push(call);
+
                 return FallbackReason::TruncatedTail;
             }
 
@@ -650,6 +655,7 @@ impl<'a> RegionParser<'a> {
         }
 
         *pos += token.len();
+
         true
     }
 
@@ -670,6 +676,7 @@ impl<'a> RegionParser<'a> {
         }
 
         skip_ws(self.text, pos);
+
         let failure = self.parse_function(pos, call);
 
         if failure != FallbackReason::None {
@@ -810,7 +817,9 @@ impl<'a> RegionParser<'a> {
             name: name.to_owned(),
             value: self.text[value_begin..value_end].to_owned(),
         });
+
         *pos = value_end + PARAM_CLOSE.len();
+
         FallbackReason::None
     }
 
@@ -825,6 +834,7 @@ impl<'a> RegionParser<'a> {
             let name_begin = at + PARAM_OPEN.len();
             let Some(name_end) = self.text[name_begin..].find('>').map(|r| name_begin + r) else {
                 candidate = self.text[at + 1..].find(PARAM_OPEN).map(|r| at + 1 + r);
+
                 continue;
             };
 
@@ -854,6 +864,7 @@ impl<'a> RegionParser<'a> {
             if let Some(open_end) = open_end {
                 depth += 1;
                 scan = open_end;
+
                 continue;
             }
 
@@ -921,6 +932,7 @@ pub(crate) fn parse_qwen_tool_call_output(
         out.diagnostics.fallback_reason = failure;
     } else if failure != FallbackReason::None {
         out.diagnostics.fallback_reason = failure;
+
         return fallback(text, out.diagnostics);
     }
 
@@ -931,6 +943,7 @@ pub(crate) fn parse_qwen_tool_call_output(
 
     out.diagnostics.structured_call_count = out.tool_calls.len() as u32;
     out.is_tool_call_response = true;
+
     out
 }
 
@@ -976,6 +989,7 @@ impl ToolCallOutputDecoder {
 
         if self.saw_tool_marker {
             self.tool_region.push_str(text);
+
             return String::new();
         }
 
@@ -992,14 +1006,18 @@ impl ToolCallOutputDecoder {
                         // The terminal marker completed: hold the buffered
                         // whitespace, the marker, and everything after it.
                         self.tool_region = std::mem::take(&mut self.trailing_whitespace);
+
                         self.tool_region.push_str(TOOL_OPEN);
                         self.tool_region.push_str(&text[cursor + c.len_utf8()..]);
+
                         self.marker_prefix = 0;
                         self.saw_tool_marker = true;
+
                         return visible;
                     }
 
                     cursor += c.len_utf8();
+
                     continue;
                 }
 
@@ -1007,6 +1025,7 @@ impl ToolCallOutputDecoder {
                 visible.push_str(&self.trailing_whitespace);
                 self.trailing_whitespace.clear();
                 visible.push_str(&TOOL_OPEN[..self.marker_prefix]);
+
                 self.marker_prefix = 0;
             }
 

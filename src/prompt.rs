@@ -269,6 +269,7 @@ fn validate_assistant_message(message: &mut Value, index: usize) -> Result<()> {
             .as_object()
             .context("function_call must be an object")?;
         let (name, arguments) = function_call_name_and_arguments(legacy)?;
+
         calls.push(tool_call_value(String::new(), name, arguments));
         message.as_object_mut().unwrap().remove("function_call");
     }
@@ -281,17 +282,21 @@ fn validate_assistant_message(message: &mut Value, index: usize) -> Result<()> {
             if !call.is_object() {
                 anyhow::bail!("message {index} tool_calls entries must be objects");
             }
+
             if !call["id"].is_string() {
                 anyhow::bail!("message {index} tool_calls entries must contain a string id");
             }
+
             ensure!(
                 call["type"] == json!("function"),
                 "only function tool_calls are supported"
             );
+
             let function = call["function"]
                 .as_object()
                 .context("tool_calls entries must contain a function object")?;
             let (name, arguments) = function_call_name_and_arguments(function)?;
+
             calls.push(tool_call_value(
                 call["id"].as_str().unwrap().to_owned(),
                 name,

@@ -147,6 +147,7 @@ fn chat_stream_emits_tool_calls_chunk_then_terminal_reason() {
 
     for choice in [role_chunk, call_chunk, finish_chunk] {
         let chunk = json!({"id":"chatcmpl-tc","object":"chat.completion.chunk","created":123,"model":"cherenkov","choices":[choice]});
+
         expected.push_str(&format!("data: {chunk}\n\n"));
     }
 
@@ -182,7 +183,9 @@ fn chat_object_nulls_content_when_only_tool_calls_are_present() {
     // calls move into the message.
     assert_eq!(message["content"], Value::Null);
     assert_eq!(parsed["choices"][0]["finish_reason"], json!("tool_calls"));
+
     let tool_calls = message["tool_calls"].as_array().unwrap();
+
     assert_eq!(tool_calls.len(), 2);
     assert_eq!(tool_calls[0]["id"], json!("call_1"));
     assert_eq!(tool_calls[0]["type"], json!("function"));

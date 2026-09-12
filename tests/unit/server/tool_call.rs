@@ -58,6 +58,7 @@ fn single_tool_call_yields_structured_arguments() {
     assert!(parsed.is_tool_call_response);
     assert_eq!(parsed.content, "Let me check that.");
     assert_eq!(parsed.tool_calls.len(), 1);
+
     let tool_call = &parsed.tool_calls[0];
 
     assert_eq!(tool_call.name, "get_weather");
@@ -95,6 +96,7 @@ fn normalization_honors_declared_types() {
     let parsed = parse_qwen_tool_call_output(&call("get_weather", &body), &contract(), false);
 
     assert!(parsed.is_tool_call_response);
+
     let tool_call = &parsed.tool_calls[0];
 
     // An out-of-scope number stays structured and is counted as a mismatch.
@@ -137,6 +139,7 @@ fn trailing_suffix_fails_strict_and_recovers_tolerant() {
         call("get_weather", &arg("city", "Oslo"))
     );
     let strict = parse_qwen_tool_call_output(&text, &contract(), false);
+
     assert!(!strict.is_tool_call_response);
     assert_eq!(strict.content, text);
     assert_eq!(
@@ -145,6 +148,7 @@ fn trailing_suffix_fails_strict_and_recovers_tolerant() {
     );
 
     let tolerant = parse_qwen_tool_call_output(&text, &contract(), true);
+
     assert!(tolerant.is_tool_call_response);
     assert_eq!(tolerant.content, "Short answer.");
     assert_eq!(tolerant.tool_calls.len(), 1);
@@ -165,6 +169,7 @@ fn truncated_tail_falls_back_strict_and_recovers_tolerant() {
     // Strict mode requires the closing tags; the budget cut is a hard
     // structural failure.
     let strict = parse_qwen_tool_call_output(&text, &contract(), false);
+
     assert!(!strict.is_tool_call_response);
     assert_eq!(strict.content, text);
     assert_eq!(
@@ -174,6 +179,7 @@ fn truncated_tail_falls_back_strict_and_recovers_tolerant() {
 
     // Tolerant mode recovers the complete call and discards the truncated tail.
     let tolerant = parse_qwen_tool_call_output(&text, &contract(), true);
+
     assert!(tolerant.is_tool_call_response);
     assert_eq!(tolerant.tool_calls[0].arguments["city"], json!("Turin"));
     assert_eq!(
@@ -190,9 +196,11 @@ fn tolerant_recovers_missing_gt_after_function_name() {
     );
 
     let strict = parse_qwen_tool_call_output(&text, &contract(), false);
+
     assert!(!strict.is_tool_call_response);
 
     let tolerant = parse_qwen_tool_call_output(&text, &contract(), true);
+
     assert!(tolerant.is_tool_call_response);
     assert_eq!(tolerant.tool_calls[0].name, "get_weather");
     assert_eq!(tolerant.tool_calls[0].arguments["city"], json!("Lyon"));
@@ -210,6 +218,7 @@ fn duplicate_parameter_fails_strict_and_keeps_earlier_calls_tolerant() {
     );
 
     let strict = parse_qwen_tool_call_output(&text, &contract(), false);
+
     assert!(!strict.is_tool_call_response);
     assert_eq!(
         strict.diagnostics.fallback_reason,
@@ -217,6 +226,7 @@ fn duplicate_parameter_fails_strict_and_keeps_earlier_calls_tolerant() {
     );
 
     let tolerant = parse_qwen_tool_call_output(&text, &contract(), true);
+
     assert!(tolerant.is_tool_call_response);
     assert_eq!(tolerant.tool_calls.len(), 1);
     assert_eq!(tolerant.tool_calls[0].arguments["city"], json!("Lisbon"));
@@ -227,6 +237,7 @@ fn undeclared_tool_name_falls_back() {
     let text = call("unknown_tool", &arg("city", "Kyiv"));
 
     let parsed = parse_qwen_tool_call_output(&text, &contract(), false);
+
     assert!(!parsed.is_tool_call_response);
     assert_eq!(parsed.content, text);
     assert_eq!(
@@ -235,6 +246,7 @@ fn undeclared_tool_name_falls_back() {
     );
 
     let tolerant = parse_qwen_tool_call_output(&text, &contract(), true);
+
     assert!(!tolerant.is_tool_call_response);
 }
 
@@ -252,9 +264,11 @@ fn decoder_holds_back_a_marker_and_finishes_into_calls() {
     // back. The whitespace buffered from the previous feed is flushed with
     // the first visible byte here.
     let visible = decoder.feed(&format!("Sure: {region}"));
+
     assert_eq!(visible, " Sure:");
 
     let terminal = decoder.finish();
+
     assert_eq!(terminal.tool_calls.len(), 1);
     assert_eq!(terminal.tool_calls[0].name, "get_weather");
     assert_eq!(terminal.tool_calls[0].arguments["city"], json!("Bonn"));
@@ -265,14 +279,20 @@ fn decoder_holds_back_a_marker_and_finishes_into_calls() {
 fn decoder_restores_held_bytes_without_a_completed_marker() {
     // A pending marker prefix is restored verbatim at the end of the stream.
     let mut decoder = ToolCallOutputDecoder::new(contract(), false);
+
     assert_eq!(decoder.feed(&format!("Hi {}", &TOOL_OPEN[..8])), "Hi");
+
     let terminal = decoder.finish();
+
     assert!(terminal.tool_calls.is_empty());
     assert_eq!(terminal.content.as_str(), format!(" {}", &TOOL_OPEN[..8]));
 
     let mut decoder = ToolCallOutputDecoder::new(contract(), false);
+
     assert_eq!(decoder.feed("Hi \n"), "Hi");
+
     let terminal = decoder.finish();
+
     assert!(terminal.tool_calls.is_empty());
     assert_eq!(terminal.content, " \n");
 }

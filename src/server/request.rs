@@ -187,6 +187,7 @@ pub(super) fn parse_request(
     if kind == ApiKind::Chat {
         let parsed = parse_tools(v)?;
         let enabled = parse_tool_choice(v)?;
+
         parse_parallel_tool_calls(v, enabled && !parsed.is_empty())?;
         parse_legacy_function_controls(v)?;
 
@@ -294,6 +295,7 @@ fn parse_tools(v: &Value) -> Result<Vec<Value>> {
                 parameters
                     .as_object()
                     .context("function parameters must be a JSON object")?;
+
                 parameters.clone()
             }
             None => json!({"type": "object", "properties": {}}),
@@ -316,6 +318,7 @@ fn parse_tools(v: &Value) -> Result<Vec<Value>> {
         // contract expects: a function wrapper whose non-guaranteed `strict`
         // flag is normalized to false.
         let mut shaped_function = Map::new();
+
         shaped_function.insert("name".to_owned(), Value::String(name.to_owned()));
         shaped_function.insert("parameters".to_owned(), parameters);
         shaped_function.insert("strict".to_owned(), Value::Bool(false));
@@ -328,6 +331,7 @@ fn parse_tools(v: &Value) -> Result<Vec<Value>> {
         }
 
         let mut shaped = Map::new();
+
         shaped.insert("type".to_owned(), Value::String("function".to_owned()));
         shaped.insert("function".to_owned(), Value::Object(shaped_function));
 

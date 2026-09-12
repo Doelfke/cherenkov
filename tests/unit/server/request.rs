@@ -368,7 +368,9 @@ fn chat_tools_reject_unsupported_controls() {
         let mut body = fn_call("get_weather").as_object().unwrap().clone();
 
         body.extend(extra.as_object().unwrap().clone());
+
         let request = Value::Object(body);
+
         assert!(
             parse_request(&request, ApiKind::Chat, &Defaults::default(), None).is_err(),
             "{request:?}"
@@ -379,6 +381,7 @@ fn chat_tools_reject_unsupported_controls() {
     let mut body = fn_call("get_weather").as_object().unwrap().clone();
 
     body.insert("tool_choice".to_owned(), json!("none"));
+
     let request = parse_request(
         &Value::Object(body),
         ApiKind::Chat,
@@ -397,7 +400,9 @@ fn chat_tools_reject_unsupported_controls() {
         let mut body = fn_call("get_weather").as_object().unwrap().clone();
 
         body.extend(legacy.as_object().unwrap().clone());
+
         let request = Value::Object(body);
+
         assert!(
             parse_request(&request, ApiKind::Chat, &Defaults::default(), None).is_err(),
             "{request:?}"
