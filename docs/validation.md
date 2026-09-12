@@ -37,6 +37,14 @@ Pull requests check Rust formatting and statement spacing on Ubuntu and
 run the test suite on macOS 15 and 26. The macOS jobs include synthetic Metal
 tests; real-weight checks need a local model.
 
+Read the contribution terms in [AUTHORS](../AUTHORS), then acknowledge them
+by adding your own entry as `Name <git-email> (@github-login)`. You can do this
+in your first PR and use a GitHub noreply address. Later PRs reuse that entry.
+The check matches the PR author's GitHub login; reviewers confirm that new
+entries were added by the contributors themselves.
+
+Run the same check locally with `cargo xtask check-author YOUR_GITHUB_LOGIN`.
+
 | Area | Coverage |
 | --- | --- |
 | CPU | Config, CLI, packing, quantization, paths, and context limits |
