@@ -608,6 +608,59 @@ impl<'a> Gpu<'a> {
         self.res.bytes()
     }
 
+    /// Positional KV-cache bytes for one attention layer at `n` positions:
+    /// the q8 key/values (kc, vc) with their q4 scales, the QSA index key
+    /// cache and the compressed block keys. Mirrors `prefix_regions`.
+    fn kv_layer_bytes(&self, n: usize) -> usize {
+        let c = &self.p.cfg;
+        let kv_row = c.num_key_value_heads * c.head_dim;
+        let ihd = c.indexer_head_dim;
+        let ratio = c.indexer_compress_ratio.max(1);
+
+        2 * (n * kv_row + n * kv_row / 32 * 2) + n * ihd * 4 + n.div_ceil(ratio) * ihd * 4
+    }
+
+    /// Trunk attention (KV) layers; DeltaNet layers hold no positional KV.
+    fn trunk_attn_layers(&self) -> usize {
+        self.layers
+            .iter()
+            .filter(|l| matches!(l.mix, Mix::Attn(_)))
+            .count()
+    }
+
+    /// Whether the MTP head contributes an attention KV cache (0 or 1).
+    fn mtp_attn_layers(&self) -> usize {
+        usize::from(
+            self.mtp
+                .as_ref()
+                .is_some_and(|m| matches!(m.layer.mix, Mix::Attn(_))),
+        )
+    }
+
+    /// Bytes of the positional KV caches now in use by the sequence on the
+    /// GPU (trunk layers at `pos`, the MTP head at `mtp_len`).
+    pub fn kv_cache_bytes(&self) -> usize {
+        self.trunk_attn_layers() * self.kv_layer_bytes(self.pos)
+            + self.mtp_attn_layers() * self.kv_layer_bytes(self.mtp_len)
+    }
+
+    /// Total capacity of the positional KV caches at `max_t` positions.
+    pub fn kv_cache_capacity(&self) -> usize {
+        (self.trunk_attn_layers() + self.mtp_attn_layers()) * self.kv_layer_bytes(self.max_t)
+    }
+
+    /// Fraction (0..=1) of the positional KV caches in use by the sequence.
+    pub fn kv_cache_fullness(&self) -> f64 {
+        let cap = self.kv_cache_capacity();
+
+        self.kv_cache_bytes() as f64 / cap.max(1) as f64
+    }
+
+    /// Fraction (0..=1) of the context window in use by the sequence.
+    pub fn context_fullness(&self) -> f64 {
+        self.pos as f64 / self.max_t.max(1) as f64
+    }
+
     pub fn working_set_limit_gb(&self) -> f64 {
         use objc2_metal::MTLDevice as _;
 

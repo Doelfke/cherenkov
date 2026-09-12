@@ -53,6 +53,8 @@ struct Active<'a> {
     cached: usize,
     config_generation: u64,
     response_bytes: usize,
+    prefill_seconds: f64,
+    decode_seconds: f64,
 }
 
 pub(super) struct Worker<'a> {
@@ -235,6 +237,8 @@ impl<'a> Worker<'a> {
                 cached: 0,
                 config_generation: pending.job.settings.generation,
                 response_bytes: limits.response_bytes,
+                prefill_seconds: 0.0,
+                decode_seconds: 0.0,
             });
         }
 
@@ -299,6 +303,11 @@ impl<'a> Worker<'a> {
         }
 
         let cancelled = request.ticket.cancelled();
+
+        if !cancelled {
+            request.report(&self.gpu);
+        }
+
         // The output writer accounts for completion and delivery failures.
         let _ = match result {
             Err(e) if !cancelled => request.output.send(Frame::Error(e.to_string())),
@@ -354,6 +363,31 @@ impl Active<'_> {
         }
     }
 
+    /// Per-request throughput and context/KV-cache fullness, reported to
+    /// the server console when the request completes.
+    fn report(&self, gpu: &Gpu) {
+        let prompt_tokens = self.prepared.ids.len();
+        let decode_tokens = self.generated().len();
+        let prefill_tps = prompt_tokens as f64 / self.prefill_seconds.max(1e-9);
+        let decode_tps = decode_tokens as f64 / self.decode_seconds.max(1e-9);
+        let prefill_s = self.prefill_seconds;
+        let decode_s = self.decode_seconds;
+        let ctx_pos = gpu.pos;
+        let max_ctx = gpu.max_t.max(1);
+        let ctx_pct = gpu.context_fullness() * 100.0;
+        let kv_pct = gpu.kv_cache_fullness() * 100.0;
+        let kv_used_mb = gpu.kv_cache_bytes() as f64 / BYTES_PER_MIB as f64;
+        let kv_total_mb = gpu.kv_cache_capacity() as f64 / BYTES_PER_MIB as f64;
+
+        eprintln!(
+            "serve {id}: prefill {prompt_tokens} tok in {prefill_s:.2}s ({prefill_tps:.0} tok/s) \
+             | decode {decode_tokens} tok in {decode_s:.2}s ({decode_tps:.1} tok/s) \
+             | ctx {ctx_pos}/{max_ctx} ({ctx_pct:.0}% full) \
+             | kv cache {kv_used_mb:.0}/{kv_total_mb:.0} MB ({kv_pct:.0}% full)",
+            id = self.ticket.id,
+        );
+    }
+
     fn step(
         &mut self,
         gpu: &mut Gpu<'_>,
@@ -401,7 +435,9 @@ impl Active<'_> {
                 quantum,
             )?;
 
-            state.update(|s| s.prefill_seconds += started.elapsed().as_secs_f64());
+            let prefill_elapsed = started.elapsed().as_secs_f64();
+            state.update(|s| s.prefill_seconds += prefill_elapsed);
+            self.prefill_seconds += prefill_elapsed;
 
             if !done || self.ticket.cancelled() {
                 return Ok(false);
@@ -441,7 +477,9 @@ impl Active<'_> {
 
             Ok(())
         })?;
-        state.update(|s| s.decode_seconds += started.elapsed().as_secs_f64());
+        let decode_elapsed = started.elapsed().as_secs_f64();
+        state.update(|s| s.decode_seconds += decode_elapsed);
+        self.decode_seconds += decode_elapsed;
 
         Ok(decoder.finish_reason.is_some())
     }
