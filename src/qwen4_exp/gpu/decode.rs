@@ -72,8 +72,9 @@ impl Gpu<'_> {
         let base = self.event_base;
         self.event_base += 4 * (n_layers as u64 + 1);
 
+        let phase_clock = self.phase_clock();
         let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
-        let mut enc = cb.computeCommandEncoder().context("encoder")?;
+        let mut enc = self.phase_encoder(&cb, None, 0)?;
 
         {
             let s = &self.scratch;
@@ -240,6 +241,8 @@ impl Gpu<'_> {
         }
 
         cb.waitUntilCompleted();
+
+        self.collect_trunk_phases(n_layers, mtp_record, phase_clock);
 
         let gpu_s = cb.GPUEndTime() - cb.GPUStartTime();
 

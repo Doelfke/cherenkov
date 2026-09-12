@@ -17,15 +17,35 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+mod activity;
 pub mod state;
+pub mod stats;
 pub use state::State;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Status,
+    StatsSummary,
+    StatsLayers {
+        #[serde(default)]
+        offset: usize,
+        #[serde(default = "page_limit")]
+        limit: usize,
+    },
+    StatsExperts {
+        layer: usize,
+        #[serde(default)]
+        offset: usize,
+        #[serde(default = "page_limit")]
+        limit: usize,
+    },
     ConfigShow,
     ConfigReload,
+}
+
+fn page_limit() -> usize {
+    64
 }
 
 const MAX_FRAME: usize = 64 * BYTES_PER_KIB;
@@ -140,6 +160,13 @@ fn handle(mut stream: UnixStream, state: &State) -> Result<()> {
         Ok(
             match serde_json::from_slice::<Command>(&read_frame(&mut stream)?)? {
                 Command::Status => state.status(),
+                Command::StatsSummary => state.summary()?,
+                Command::StatsLayers { offset, limit } => state.layers(offset, limit)?,
+                Command::StatsExperts {
+                    layer,
+                    offset,
+                    limit,
+                } => state.experts(layer, offset, limit)?,
                 Command::ConfigShow => state.show_config(),
                 Command::ConfigReload => state.reload()?,
             },

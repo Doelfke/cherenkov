@@ -2,6 +2,39 @@ use super::*;
 use crate::config::{Config, Overrides, Source};
 use std::sync::atomic::AtomicUsize;
 
+#[path = "control_activity.rs"]
+mod activity;
+
+#[test]
+fn stats_operations_use_a_consistent_wire_namespace() {
+    for (command, op) in [
+        (Command::StatsSummary, "stats_summary"),
+        (
+            Command::StatsLayers {
+                offset: 0,
+                limit: 1,
+            },
+            "stats_layers",
+        ),
+        (
+            Command::StatsExperts {
+                layer: 0,
+                offset: 0,
+                limit: 1,
+            },
+            "stats_experts",
+        ),
+    ] {
+        let value = serde_json::to_value(command).unwrap();
+
+        assert_eq!(value["op"], op);
+
+        let decoded: Command = serde_json::from_value(value.clone()).unwrap();
+
+        assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+    }
+}
+
 #[test]
 fn buffered_control_response_survives_peer_close() {
     let (mut client, mut server) = UnixStream::pair().unwrap();
@@ -65,15 +98,31 @@ fn socket_queries_work_and_reject_mutations_without_a_config_file() {
     state.update(|s| {
         s.ready = true;
         s.completed_requests = 3;
+        s.memory.resources = crate::qwen4_exp::gpu::MemoryStats {
+            metal_allocated_bytes_observed: 9_007_199_254_740_993,
+            context_capacity_tokens: 8192,
+            kv_index_capacity_bytes: 184_031_744,
+            ..Default::default()
+        };
     });
 
     let listener = Listener::start(&socket, state).unwrap();
 
     assert_eq!(std::fs::metadata(&socket).unwrap().mode() & 0o777, 0o600);
+
+    let status = query(&socket, Command::Status).unwrap();
+
+    assert_eq!(status["stats"]["completed_requests"], 3);
     assert_eq!(
-        query(&socket, Command::Status).unwrap()["stats"]["completed_requests"],
-        3
+        status["stats"]["memory"]["metal_allocated_bytes_observed"],
+        9_007_199_254_740_993_u64
     );
+    assert_eq!(status["stats"]["memory"]["context_capacity_tokens"], 8192);
+    assert_eq!(
+        status["stats"]["memory"]["kv_index_capacity_bytes"],
+        184_031_744
+    );
+    assert!(status["stats"]["memory"]["resources"].is_null());
     assert_eq!(
         query(&socket, Command::ConfigShow).unwrap()["effective"]["generation"],
         1

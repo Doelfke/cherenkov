@@ -4,6 +4,7 @@ use super::*;
 use half::bf16;
 
 mod attention;
+mod memory;
 mod qsa;
 mod sampling;
 mod state;

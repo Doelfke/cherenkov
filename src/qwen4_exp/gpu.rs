@@ -30,6 +30,7 @@ use objc2_metal::{
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
+mod activity;
 mod attention;
 mod decode;
 mod deltanet;
@@ -37,11 +38,19 @@ mod dispatch;
 mod experts;
 mod hyperconnection;
 mod load;
+mod memory;
 mod mtp;
 mod params;
+mod phases;
 mod ple;
 mod sampling;
 mod state;
+
+pub use activity::layers::{PhaseStats, PredictionStats, QuantStats};
+pub use activity::reads::ReadStats;
+pub use activity::{ExpertActivity, ExpertCounters, LayerStats};
+pub use memory::MemoryStats;
+pub use phases::GpuTiming;
 
 use params::*;
 
@@ -396,6 +405,10 @@ pub struct Gpu<'a> {
     /// set entries with the developer override. Cached reads serve mapped
     /// entries; uncached reads fill copy slots and the prefill ring.
     res: residency::Pool,
+    activity: ExpertActivity,
+    read_tracker: activity::reads::ReadTracker,
+    activity_started: std::time::Instant,
+    phase_timer: Option<phases::PhaseTimer>,
     pool_file: std::fs::File,
     pool_file_nocache: std::fs::File,
     /// The n-gram table, for touching rows' pages ahead of the gather.
@@ -468,7 +481,7 @@ pub struct Gpu<'a> {
     pub ngram_gather_s: std::cell::Cell<f64>,
     pub ngram_ms: Vec<f64>,
     pub step_ms: Vec<f64>,
-    /// GPU-active time per step (sum of command buffer spans).
+    /// Command-buffer spans per step, including event waits.
     pub gpu_ms: Vec<f64>,
     /// Time spent waiting for synchronous expert fetches, per step.
     pub io_ms: Vec<f64>,
@@ -520,6 +533,7 @@ pub struct Gpu<'a> {
     /// Kernel dispatches per step and GPU idle time waiting on the CPU
     /// within a step.
     pub dispatches: Vec<usize>,
+    /// Legacy name: CPU service wall time, which overlaps resident GPU work.
     pub gpu_idle_ms: Vec<f64>,
     /// Rows per trunk step and time of MTP draft passes, per step.
     pub rows: Vec<usize>,
@@ -598,9 +612,7 @@ impl<'a> Gpu<'a> {
     }
 
     pub fn allocated_gb(&self) -> f64 {
-        use objc2_metal::MTLDevice as _;
-
-        self.ctx.device.currentAllocatedSize() as f64 / BYTES_PER_GB as f64
+        self.allocated_bytes() as f64 / BYTES_PER_GB as f64
     }
 
     /// What Metal will keep resident at once on this machine.

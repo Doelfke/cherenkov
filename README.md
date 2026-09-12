@@ -101,6 +101,8 @@ and optional retained sessions. Chat renders the checkpoint's Jinja template
 with thinking disabled. Reasoning-effort controls are not exposed yet.
 See the [HTTP API](docs/running.md).
 
+Run `target/release/cherenkov dash` in another terminal for live statistics.
+
 **CLI:** pass a model directory and prompt to generate directly.
 
 ```sh

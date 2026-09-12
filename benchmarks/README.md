@@ -62,7 +62,7 @@ Reported Metal allocations above 25 decimal GB also invalidate it; these
 readings are taken after prefill scratch is released, so they do not
 measure its transient peak or cap process memory/the OS file cache.
 
-The `gpu_active_ms` field comes from the command buffer's GPU end timestamp
+The `gpu_span_ms` field comes from the command buffer's GPU end timestamp
 minus its start timestamp. It is not a utilization counter. `io_wait_ms`
 times the host's expert-read servicing interval, which overlaps GPU work;
 do not add the two as independent components of decode time.

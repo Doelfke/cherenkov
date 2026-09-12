@@ -20,6 +20,7 @@ needless_else = "warn"
 redundant_else = "warn"
 
 [dependencies]
+anstream = "1"
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 dirs = "7"
@@ -36,8 +37,12 @@ rayon = "1.12.0"
 rand = "0.9.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+tabled = { version = "0.22", default-features = false, features = ["derive"] }
 tokenizers = "0.23.1"
 toml = "1.1"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
+textwrap = { version = "0.16", default-features = false, features = ["unicode-width", "unicode-linebreak"] }
+tui-scrollview = "0.6"
 
 [dev-dependencies]
 sha2 = "0.11"

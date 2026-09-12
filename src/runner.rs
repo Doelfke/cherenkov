@@ -401,7 +401,7 @@ pub(crate) fn qwen4_exp_gen_once(
         mean(&ngram_recent),
     );
     eprintln!(
-        "decode {} tokens in {:.2}s ({:.2} tok/s) | {} steps, mean step {:.1} ms (min {:.1}, max {:.1}) | gpu-active {:.1} ms | io wait {:.1} ms (set {:.1}, read {:.1}) | sync fetches/step {:.1} + lookahead {:.1} (warm {:.1}, cut {:.1}) | pool {}/{} | {:.2} GB Metal",
+        "decode {} tokens in {:.2}s ({:.2} tok/s) | {} steps, mean step {:.1} ms (min {:.1}, max {:.1}) | gpu-span {:.1} ms | io wait {:.1} ms (set {:.1}, read {:.1}) | sync fetches/step {:.1} + lookahead {:.1} (warm {:.1}, cut {:.1}) | pool {}/{} | {:.2} GB Metal",
         out.len(),
         decode,
         out.len() as f64 / decode.max(1e-9),
@@ -420,6 +420,10 @@ pub(crate) fn qwen4_exp_gen_once(
         gpu.pool_resident(),
         gpu.pool_slots(),
         gpu.allocated_gb()
+    );
+    eprintln!(
+        "memory_stats {}",
+        serde_json::to_string(&gpu.memory_stats())?
     );
     dump_decode(gpu, ids, &out, prefill_steps)?;
 

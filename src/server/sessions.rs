@@ -1,10 +1,11 @@
 //! Bounded conversation history, committed at the final-response publication boundary.
 
-use super::{failure::Failure, registry, request::SessionInput};
+use super::{UsageStats, failure::Failure, registry, request::SessionInput};
 use crate::units::BYTES_PER_MIB;
 use crate::{config::Config, sampling::Sampling};
 use anyhow::{Context, Result, ensure};
 use rand::rngs::StdRng;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -20,6 +21,27 @@ struct Session {
     busy: Option<String>,
     touched: Instant,
     reserved: usize,
+    committed_turns: u64,
+    usage: UsageStats,
+}
+
+#[derive(Serialize)]
+struct SessionStats<'a> {
+    committed_turns: u64,
+    history_bytes: usize,
+    reserved_history_bytes: usize,
+    usage: &'a UsageStats,
+}
+
+impl Session {
+    fn stats(&self) -> SessionStats<'_> {
+        SessionStats {
+            committed_turns: self.committed_turns,
+            history_bytes: self.history.len(),
+            reserved_history_bytes: self.reserved,
+            usage: &self.usage,
+        }
+    }
 }
 
 pub(super) struct Store {
@@ -52,6 +74,14 @@ impl Store {
 
     pub(super) fn count(&self) -> usize {
         self.entries.len()
+    }
+
+    pub(super) fn stats(&self) -> crate::control::state::SessionStats {
+        crate::control::state::SessionStats {
+            entries: self.count(),
+            bytes: self.bytes(),
+            evictions: self.evictions,
+        }
     }
 
     pub(super) fn expire(&mut self) {
@@ -116,6 +146,8 @@ impl Store {
                 busy: None,
                 touched: Instant::now(),
                 reserved: 0,
+                committed_turns: 0,
+                usage: UsageStats::default(),
             },
         );
 
@@ -137,6 +169,7 @@ impl Store {
             "context_tokens": session.context,
             "active_request_id": session.busy,
             "messages": serde_json::from_str::<Value>(&session.history)?,
+            "stats": session.stats(),
         }))
     }
 
@@ -246,7 +279,12 @@ impl Turn {
         }))
     }
 
-    pub(super) fn prepare(mut self, text: &str, rng: Option<StdRng>) -> Result<Commit> {
+    pub(super) fn prepare(
+        mut self,
+        text: &str,
+        rng: Option<StdRng>,
+        usage: UsageStats,
+    ) -> Result<Commit> {
         self.input
             .messages
             .push(json!({"role":"assistant", "content":text}));
@@ -278,6 +316,7 @@ impl Turn {
             turn: self,
             history,
             rng,
+            usage,
         })
     }
 }
@@ -295,6 +334,7 @@ pub(super) struct Commit {
     turn: Turn,
     history: Box<str>,
     rng: Option<StdRng>,
+    usage: UsageStats,
 }
 
 impl Commit {
@@ -307,6 +347,10 @@ impl Commit {
         session.history = self.history;
         session.sampling = self.turn.input.sampling.clone();
         session.rng = self.rng;
+        session.committed_turns = session.committed_turns.saturating_add(1);
+
+        session.usage.add(self.usage);
+
         session.reserved = 0;
         session.touched = Instant::now();
     }
@@ -315,3 +359,7 @@ impl Commit {
 #[cfg(test)]
 #[path = "../../tests/unit/server/sessions.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/server/session_stats.rs"]
+mod stats_tests;

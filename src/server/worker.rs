@@ -1,7 +1,7 @@
 //! Round-robin GPU scheduling. Each active request owns its decoding state.
 
 use super::{
-    Job,
+    Job, UsageStats,
     http::error,
     output::{Frame, Output},
     registry::Ticket,
@@ -10,10 +10,7 @@ use super::{
 };
 use crate::units::BYTES_PER_MIB;
 use crate::{
-    control::{
-        State,
-        state::{ActiveRequest, SessionStats},
-    },
+    control::{State, state::ActiveRequest},
     options::Options,
     prefix_cache::{Prefill, PrefixCache},
     qwen4_exp::gpu::{Gpu, PrefixState},
@@ -50,12 +47,13 @@ struct Active<'a> {
     output: Output,
     text_decoder: Box<dyn FnMut(u32) -> Result<Option<String>> + 'a>,
     text: String,
-    cached: usize,
+    usage: UsageStats,
     config_generation: u64,
     response_bytes: usize,
 }
 
 pub(super) struct Worker<'a> {
+    activity_snapshot: crate::qwen4_exp::gpu::ExpertActivity,
     gpu: Gpu<'a>,
     tok: &'a ChatTokenizer,
     options: Options,
@@ -78,6 +76,7 @@ impl<'a> Worker<'a> {
         sessions: Arc<Mutex<Store>>,
     ) -> Self {
         Self {
+            activity_snapshot: Default::default(),
             gpu,
             tok,
             options,
@@ -232,7 +231,7 @@ impl<'a> Worker<'a> {
                         .map_err(|e| anyhow::anyhow!("decode: {e}"))
                 }),
                 text: String::new(),
-                cached: 0,
+                usage: UsageStats::default(),
                 config_generation: pending.job.settings.generation,
                 response_bytes: limits.response_bytes,
             });
@@ -313,33 +312,31 @@ impl<'a> Worker<'a> {
     }
 
     fn observe(&mut self) {
-        self.state.observe(&self.gpu, &self.cache);
+        self.state
+            .observe(&self.gpu, &self.cache, &mut self.activity_snapshot);
 
         let mut sessions = self.sessions.lock().unwrap();
 
         sessions.expire();
         self.state.update(|s| {
             s.active_state_reserved_bytes = self.reserved;
-            s.sessions = SessionStats {
-                entries: sessions.count(),
-                bytes: sessions.bytes(),
-                evictions: sessions.evictions,
-            };
-            s.active = self
-                .active
-                .iter()
-                .map(|a| ActiveRequest {
-                    id: a.ticket.id.clone(),
-                    session_id: a.session.as_ref().map(|s| s.id.clone()),
-                    phase: a.phase_name(),
-                    generated_tokens: a.generated().len(),
-                })
-                .collect();
+            s.sessions = sessions.stats();
+            s.active = self.active.iter().map(Active::stats).collect();
         });
     }
 }
 
 impl Active<'_> {
+    fn stats(&self) -> ActiveRequest {
+        ActiveRequest {
+            id: self.ticket.id.clone(),
+            session_id: self.session.as_ref().map(|s| s.id.clone()),
+            phase: self.phase_name(),
+            usage: self.usage,
+            reserved_state_bytes: self.reservation,
+        }
+    }
+
     fn phase_name(&self) -> &'static str {
         match self.phase {
             Phase::Decode(_) => "decode",
@@ -376,7 +373,8 @@ impl Active<'_> {
                 &self.prepared.boundaries,
                 &self.prepared.options,
             )?;
-            self.cached = prefill.cached;
+            self.usage.prompt_tokens = self.prepared.ids.len() as u64;
+            self.usage.cached_tokens = prefill.cached as u64;
 
             state.update(|s| {
                 s.prompt_tokens += self.prepared.ids.len() as u64;
@@ -393,15 +391,19 @@ impl Active<'_> {
                 return Ok(false);
             }
 
-            let done = prefill.advance(
+            let result = prefill.advance(
                 gpu,
                 cache,
                 &self.prepared.ids,
                 &self.prepared.options,
                 quantum,
-            )?;
+            );
+            let elapsed = started.elapsed().as_secs_f64();
+            self.usage.prefill_seconds += elapsed;
 
-            state.update(|s| s.prefill_seconds += started.elapsed().as_secs_f64());
+            state.update(|s| s.prefill_seconds += elapsed);
+
+            let done = result?;
 
             if !done || self.ticket.cancelled() {
                 return Ok(false);
@@ -425,7 +427,7 @@ impl Active<'_> {
             unreachable!()
         };
 
-        decoder.step(gpu, None, None, &mut |token| {
+        let result = decoder.step(gpu, None, None, &mut |token| {
             ensure!(!self.ticket.cancelled(), "request cancelled");
 
             if let Some(delta) = (self.text_decoder)(token)? {
@@ -440,8 +442,14 @@ impl Active<'_> {
             state.token();
 
             Ok(())
-        })?;
-        state.update(|s| s.decode_seconds += started.elapsed().as_secs_f64());
+        });
+        let elapsed = started.elapsed().as_secs_f64();
+        self.usage.decode_seconds += elapsed;
+        self.usage.generated_tokens = decoder.tokens.len() as u64;
+
+        state.update(|s| s.decode_seconds += elapsed);
+
+        result?;
 
         Ok(decoder.finish_reason.is_some())
     }
@@ -478,7 +486,7 @@ impl Active<'_> {
         };
         let usage = json!({
             "prompt_tokens": self.prepared.ids.len(),
-            "prompt_tokens_details": {"cached_tokens": self.cached},
+            "prompt_tokens_details": {"cached_tokens": self.usage.cached_tokens},
             "completion_tokens": self.generated().len(),
             "total_tokens": self.prepared.ids.len() + self.generated().len(),
         });
@@ -487,7 +495,7 @@ impl Active<'_> {
         } else {
             self.session
                 .take()
-                .map(|t| t.prepare(&full, rng))
+                .map(|t| t.prepare(&full, rng, self.usage))
                 .transpose()?
         };
 

@@ -60,7 +60,10 @@ fn server_cli_records_only_explicit_overrides() {
 fn control_commands_do_not_require_a_model_or_prompt() {
     for args in [
         vec!["cherenkov", "status", "--json"],
+        vec!["cherenkov", "dash"],
         vec!["cherenkov", "config", "show"],
+        vec!["cherenkov", "stats", "layers"],
+        vec!["cherenkov", "stats", "summary"],
         vec![
             "cherenkov",
             "config",
@@ -72,6 +75,75 @@ fn control_commands_do_not_require_a_model_or_prompt() {
     ] {
         assert!(Cli::try_parse_from(args).is_ok());
     }
+}
+
+#[test]
+fn dashboard_accepts_a_control_socket() {
+    let cli = Cli::try_parse_from(["cherenkov", "dash", "--socket", "/private/socket"]).unwrap();
+
+    assert!(
+        matches!(cli.command, Some(Command::Dash { socket: Some(path) }) if path == std::path::Path::new("/private/socket"))
+    );
+}
+
+#[test]
+fn expert_stats_forward_page_and_socket_options() {
+    let cli = Cli::try_parse_from([
+        "cherenkov",
+        "stats",
+        "experts",
+        "12",
+        "--offset",
+        "128",
+        "--limit",
+        "32",
+        "--socket",
+        "/private/socket",
+    ])
+    .unwrap();
+    let Some(Command::Stats {
+        target,
+        socket,
+        json,
+    }) = cli.command
+    else {
+        panic!("stats expected")
+    };
+
+    assert_eq!(socket, Some(PathBuf::from("/private/socket")));
+    assert!(!json);
+    assert_eq!(
+        serde_json::to_value(target.command()).unwrap(),
+        serde_json::json!({
+            "op": "stats_experts", "layer": 12, "offset": 128, "limit": 32,
+        })
+    );
+}
+
+#[test]
+fn stats_accept_json_before_or_after_the_target() {
+    for args in [
+        vec!["stats", "--json", "summary"],
+        vec!["stats", "summary", "--json"],
+        vec!["stats", "layers", "--json"],
+        vec!["stats", "experts", "0", "--json"],
+    ] {
+        let cli = Cli::try_parse_from(["cherenkov"].into_iter().chain(args)).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::Stats { json: true, .. })
+        ));
+    }
+}
+
+#[test]
+fn stats_reject_unbounded_pages_and_missing_layer() {
+    for limit in ["0", "129", "-1"] {
+        assert!(Cli::try_parse_from(["cherenkov", "stats", "layers", "--limit", limit]).is_err());
+    }
+
+    assert!(Cli::try_parse_from(["cherenkov", "stats", "experts"]).is_err());
 }
 
 #[test]

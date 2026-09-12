@@ -53,6 +53,49 @@ fn checkpoint(dir: &Path) {
     }
 }
 
+fn packed_checkpoint() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+
+    checkpoint(dir.path());
+    prepare(dir.path(), None, &[4]).unwrap();
+
+    dir
+}
+
+#[test]
+fn manifest_rejects_inconsistent_expert_dimensions() {
+    let dir = packed_checkpoint();
+    let packed = dir.path().join("packed");
+    let manifest = Manifest::load(&packed).unwrap();
+    let mutations: [fn(&mut ExpertLayout); 5] = [
+        |layout| {
+            layout.layer_prefixes.pop();
+        },
+        |layout| {
+            layout.layer_prefixes.push("extra".into());
+        },
+        |layout| layout.layers = 0,
+        |layout| layout.experts = 0,
+        |layout| {
+            layout.layers = 2;
+            layout.layer_prefixes = vec!["first".into(), "second".into()];
+            layout.experts = usize::MAX;
+        },
+    ];
+
+    for mutate in mutations {
+        let mut invalid = manifest.clone();
+
+        mutate(&mut invalid.experts);
+        std::fs::write(
+            packed.join("manifest.json"),
+            serde_json::to_vec(&invalid).unwrap(),
+        )
+        .unwrap();
+        assert!(Manifest::load(&packed).is_err());
+    }
+}
+
 #[test]
 fn fresh_checkpoint_builds_base_and_both_targets_at_custom_output() {
     let dir = tempfile::tempdir().unwrap();
@@ -104,11 +147,7 @@ fn fresh_checkpoint_builds_base_and_both_targets_at_custom_output() {
 
 #[test]
 fn default_pack_can_be_extended_from_the_packed_directory() {
-    let dir = tempfile::tempdir().unwrap();
-
-    checkpoint(dir.path());
-    prepare(dir.path(), None, &[4]).unwrap();
-
+    let dir = packed_checkpoint();
     let out = dir.path().join("packed");
 
     assert!(!out.join("experts2.bin").exists());

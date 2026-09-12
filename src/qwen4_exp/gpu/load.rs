@@ -27,6 +27,7 @@ impl<'a> Gpu<'a> {
         memory_bytes: Option<usize>,
     ) -> Result<Self> {
         options.validate()?;
+        p.manifest.experts.validate_dimensions()?;
 
         let c = &p.cfg;
 
@@ -566,6 +567,16 @@ impl<'a> Gpu<'a> {
         let wmap = ctx.new_buffer(n_rows * MAX_NB * SLOT_STRIDE * 4)?;
         let ring = ctx.new_buffer(prefill::RING * stride)?;
 
+        // A capped diagnostic trunk does not retain the normal adjacent-pass layout.
+        let (phase_timer, gpu_timing) = super::phases::PhaseTimer::initialize(
+            &ctx,
+            p.manifest.experts.layers,
+            layer_cap() >= layers.len(),
+        );
+        let mut activity = ExpertActivity::new(&p.manifest.experts);
+        activity.gpu_timestamps_available = phase_timer.is_some();
+        activity.gpu_timing = gpu_timing;
+
         Ok(Gpu {
             embed: q(&format!("{m}.embed_tokens"))?,
             final_mixer: hc(&format!("{m}.hyper_connection_mixer"), false)?,
@@ -575,6 +586,10 @@ impl<'a> Gpu<'a> {
             pipes,
             dense,
             res,
+            activity,
+            read_tracker: super::activity::reads::ReadTracker::new(p.manifest.experts.layers),
+            activity_started: std::time::Instant::now(),
+            phase_timer,
             pool_file,
             pool_file_nocache,
             low_bit_store,

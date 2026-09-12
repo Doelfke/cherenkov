@@ -26,7 +26,10 @@ mod request;
 mod response;
 mod routes;
 mod sessions;
+mod stats;
 mod worker;
+
+pub use stats::UsageStats;
 
 use http::error;
 use routes::connection;
@@ -91,7 +94,7 @@ pub fn serve(source: Source) -> Result<()> {
             <= config.limits.memory_gb,
         "Metal plus cache/session reservations exceeds configured memory budget"
     );
-    state.observe(&gpu, &cache);
+    state.observe(&gpu, &cache, &mut Default::default());
     state.update(|s| {
         s.ready = true;
         s.http_address = Some(address.to_string());

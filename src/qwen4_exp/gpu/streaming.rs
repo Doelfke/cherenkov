@@ -4,6 +4,8 @@
 //! uses `event_res`. Event waits protect the CPU/GPU ownership transitions
 //! of the routing scratch, slot table, and expert records.
 
+use super::activity::reads::{ReadSource, ReadTicket};
+use super::phases::CpuPhase;
 use super::*;
 
 /// A background read may be absent under the FAKE developer option, but
@@ -11,6 +13,7 @@ use super::*;
 pub(super) struct PendingRead {
     pub(super) thread: Option<std::thread::JoinHandle<()>>,
     pub(super) records: Vec<usize>,
+    pub(super) tickets: Vec<(usize, ReadTicket)>,
 }
 
 /// One block's monotonic handshake. The two event objects have distinct
@@ -88,6 +91,14 @@ impl Gpu<'_> {
             .map(|&e| self.record_id(record_layer, e))
             .collect();
         let t_acq = std::time::Instant::now();
+
+        for &rid in &rids {
+            self.activity.records[rid].prefetch_requests += 1;
+            self.activity.layers[record_layer]
+                .prediction
+                .predicted_resident += u64::from(self.res.is_member(rid));
+        }
+
         let need = self.res.acquire(&self.ctx, &rids, self.step_no)?;
         self.step_set_s += t_acq.elapsed().as_secs_f64();
 
@@ -95,13 +106,17 @@ impl Gpu<'_> {
             return Ok(0);
         }
 
-        let (plan, warm) = self.res.plan_reads(&need);
+        let (mut plan, warm) = self.res.plan_reads(&need);
+
+        self.record_read_plan(&mut plan, &need, ReadSource::Prefetch);
+
         self.step_warm += warm;
         let n = plan.len();
 
         if self.fake_experts {
             self.pending = Some(PendingRead {
                 thread: None,
+                tickets: Vec::new(),
                 records: need,
             });
 
@@ -113,6 +128,7 @@ impl Gpu<'_> {
             self.pool_file_nocache.try_clone().expect("dup experts fd"),
         );
         self.pending = Some(PendingRead {
+            tickets: plan.tickets(&need),
             thread: Some(std::thread::spawn(move || plan.run(&cached, &nocache))),
             records: need,
         });
@@ -260,7 +276,7 @@ impl Gpu<'_> {
         cb.encodeSignalEvent_value(event, signals.router_ready);
         cb.encodeWaitForEvent_value(event, signals.resident_ready);
 
-        *enc = cb.computeCommandEncoder().context("encoder")?;
+        *enc = self.phase_encoder(cb, Some(4 * slot_row + 1), 4 * slot_row + 2)?;
 
         self.experts_b(enc, &layer.moe, slot_row, nb, 0);
         enc.endEncoding();
@@ -271,7 +287,7 @@ impl Gpu<'_> {
         cb.encodeSignalEvent_value(event_res, signals.resident_done);
         cb.encodeWaitForEvent_value(event, signals.misses_ready);
 
-        *enc = cb.computeCommandEncoder().context("encoder")?;
+        *enc = self.phase_encoder(cb, Some(4 * slot_row + 3), 4 * slot_row + 4)?;
 
         self.experts_b(enc, &layer.moe, slot_row, nb, 1);
 
@@ -336,6 +352,8 @@ impl Gpu<'_> {
             }
         }
 
+        let mut cut_kinds = [false; 3];
+
         if cut_now {
             let need_pos = |rid: usize| need.iter().position(|&r| r == rid).unwrap();
             let mut active_count = order.len();
@@ -353,6 +371,11 @@ impl Gpu<'_> {
                 if wmax[i] < self.cut_w {
                     active_count -= 1;
                     self.step_cut += 1;
+                    let record = rids[i];
+                    let layer = self.activity.layer_for_record(record);
+                    let kind = self.res.kind(record) as usize;
+                    self.activity.layers[layer].quant[kind].cut_experts += 1;
+                    cut_kinds[kind] = true;
 
                     self.inflight.push((f.clone(), rids[i]));
 
@@ -375,6 +398,14 @@ impl Gpu<'_> {
                     .add(slot_row * SLOT_STRIDE);
 
                 tab.add(SLOT_STRIDE - 1).write(active_count as u64);
+            }
+        }
+
+        if let Some(&record) = rids.first() {
+            let layer = self.activity.layer_for_record(record);
+
+            for (stats, cut) in self.activity.layers[layer].quant.iter_mut().zip(cut_kinds) {
+                stats.cut_batches += u64::from(cut);
             }
         }
 
@@ -427,6 +458,10 @@ impl Gpu<'_> {
         self.wait_for_router(signals.router_ready, slot_row)?;
 
         let t0 = std::time::Instant::now();
+        let cpu0 = super::phases::thread_cpu_seconds();
+
+        self.phase_cpu_mark(slot_row, CpuPhase::Observed);
+
         let idx = self.read_u32(&self.scratch.topk_idx, nb * k);
         let wts = self.read_f32(&self.scratch.topk_w, nb * k);
 
@@ -444,6 +479,9 @@ impl Gpu<'_> {
 
         if predicted.front().is_some_and(|(row, _)| *row == slot_row) {
             let (_, pred) = predicted.pop_front().unwrap();
+
+            self.record_prediction(record_layer, &pred, &union);
+
             hits = union.iter().filter(|e| pred.contains(e)).count();
             total = union.len();
         }
@@ -454,23 +492,38 @@ impl Gpu<'_> {
             self.la_log.push(e);
         }
 
-        // Records the previous layer read for this one join the set now.
+        // Observe prediction readiness before joining its reads.
+        let prefetch_read_before = self.step_read_s;
+
         self.join_pending()?;
+
+        self.activity.layers[record_layer]
+            .phases
+            .prefetch_wait_seconds += self.step_read_s - prefetch_read_before;
+
+        self.record_routed_experts(record_layer, &idx, &union);
 
         let rids: Vec<usize> = union
             .iter()
             .map(|&e| self.record_id(record_layer, e))
             .collect();
+
         let t_acq = std::time::Instant::now();
         let need = self.res.acquire(&self.ctx, &rids, self.step_no)?;
         self.step_set_s += t_acq.elapsed().as_secs_f64();
         self.step_misses += need.len();
         let miss_bytes = self.miss_record_bytes(&need);
         self.step_miss_bytes += need.len() * miss_bytes;
+
+        self.record_quant_selection(record_layer, &idx, &union);
+
         // Start reading the misses at once, on their own thread; the GPU
         // runs the resident experts meanwhile.
         let ti = std::time::Instant::now();
-        let (plan, warm) = self.res.plan_reads(&need);
+        let (mut plan, warm) = self.res.plan_reads(&need);
+
+        self.record_read_plan(&mut plan, &need, ReadSource::Demand);
+
         self.step_warm += warm;
         let deadline = self.cut_w > 0.0 && !self.fake_experts;
         // Per-record completion only for the deadline policy; otherwise
@@ -554,7 +607,11 @@ impl Gpu<'_> {
             }
         }
 
+        self.phase_cpu_mark(slot_row, CpuPhase::ResidentRelease);
         self.event.setSignaledValue(signals.resident_ready);
+        self.record_cut_eligible(record_layer, &rids, &missing, &wmax);
+
+        let read_wait_before = self.step_read_s;
 
         // Deadline: when the resident part is done, cut the weak misses
         // that have not landed (from the weak end, as a truncation), wait
@@ -587,6 +644,10 @@ impl Gpu<'_> {
             self.step_read_s += t.elapsed().as_secs_f64();
         }
 
+        self.activity.layers[record_layer]
+            .phases
+            .demand_wait_seconds += self.step_read_s - read_wait_before;
+
         if let Some(next_layer) = lookahead {
             let lk = self.p.cfg.num_experts_per_tok;
             let la_idx = self.read_u32(&self.scratch.la_idx, nb * lk);
@@ -607,7 +668,13 @@ impl Gpu<'_> {
         self.step_set_s += t_fin.elapsed().as_secs_f64();
         *io_s += ti.elapsed().as_secs_f64();
 
+        self.phase_cpu_mark(slot_row, CpuPhase::FetchedRelease);
         self.event.setSignaledValue(signals.misses_ready);
+
+        let phase = &mut self.activity.layers[record_layer].phases;
+        phase.service_windows += 1;
+        phase.service_wall_seconds += t0.elapsed().as_secs_f64();
+        phase.service_cpu_seconds += (super::phases::thread_cpu_seconds() - cpu0).max(0.0);
 
         *turn_s += t0.elapsed().as_secs_f64();
 
@@ -625,3 +692,7 @@ impl Gpu<'_> {
         Ok((hits, total, issued))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/qwen4_exp/gpu/streaming.rs"]
+mod tests;
