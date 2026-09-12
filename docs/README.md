@@ -22,7 +22,8 @@ Changes to `main` publish automatically.
 | --- | --- |
 | `src/` | CLI, server, storage and shared runtime support |
 | `src/server/` | HTTP framing, routes, request policy, scheduling, sessions and output |
-| `src/control/`, `src/cli_output/` | Statistics protocol, reports, and dashboard |
+| `src/control/` | Control state and statistics protocol |
+| `src/cli_output/` | Terminal reports and dashboard |
 | `src/runner/` | Resumable decoding and optional diagnostics |
 | `src/qwen4_exp/` | Model config, packer, CPU reference and GPU execution |
 | `kernels/` | Metal fragments grouped by common primitives and model subsystem |
