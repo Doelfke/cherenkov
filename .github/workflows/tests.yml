@@ -1,0 +1,35 @@
+name: Unit tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v7
+      - name: Install Rust
+        uses: jdx/mise-action@v4
+        with:
+          install_args: rust
+      - name: Show GPU information
+        run: system_profiler SPDisplaysDataType
+      - name: Run unit tests and synthetic Metal checks
+        run: cargo test --locked --workspace --release -- --test-threads=1
