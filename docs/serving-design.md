@@ -1,133 +1,97 @@
 # Serving architecture
 
-The implemented interface is documented in [running](running.md) and
-[server configuration](server-config.md). This note describes ownership and
-the boundaries that keep concurrent requests independent.
+See [running](running.md) for the API and [configuration](server-config.md)
+for limits and defaults.
 
 ## Source map
 
-`src/server.rs` starts the server and connects its owners. Its child modules
-separate the protocol from request execution:
+`src/server.rs` starts the server. Its child modules are:
 
-| Module | Responsibility |
+| Module | Purpose |
 | --- | --- |
-| `http` | Bounded HTTP input and JSON/SSE framing |
-| `routes` | Endpoints, request registration and queue admission |
-| `request` | Completion options, resolved session input and token/context validation |
-| `registry` | Request IDs and the atomic cancellation/publication boundary |
-| `worker` | GPU scheduling, checkpoint switching and active-memory admission |
-| `sessions` | Retained history, sampling state and transactional turns |
-| `output` | Bounded writer queues and final publication |
-| `response` | Chat/completion response formats |
-| `failure` | HTTP status classification |
+| `http` | HTTP input and JSON/SSE framing |
+| `routes` | Endpoints, registration, and queue admission |
+| `request` | Options, session input, and context validation |
+| `registry` | Request IDs and cancellation state |
+| `worker` | Scheduling, state switching, and memory admission |
+| `sessions` | History, sampling state, and transactional turns |
+| `output` | Writer queues and final publication |
+| `response` | Chat and text response formats |
+| `failure` | HTTP error classification |
+| `stats` | Usage shared by active requests and committed sessions |
 
-`src/prompt.rs` loads and compiles the checkpoint's Jinja template once for
-CLI/chat formatting. Cache boundaries are prefixes verified against the full
-rendered text. Session settings and messages reach the worker as typed input.
+`src/prompt.rs` compiles the checkpoint template once. Cache boundaries must
+match prefixes of the complete rendered prompt. Sessions pass typed settings
+and messages to the worker.
 
-## Ownership
+## Ownership and scheduling
 
 | Owner | State |
 | --- | --- |
-| GPU worker | Shared weights, expert pool, pipelines, scratch and one live sequence |
-| Active request | Hybrid checkpoint, prefill progress, pending token, verifier/drafts, sampler, decoder and output counter |
-| Retained session | Committed chat history, sampling settings, RNG state and context cap |
-| Prefix cache | Reusable hybrid checkpoints and final prompt logits, bounded by bytes/count/TTL |
-| Response writer | Bounded text queue, socket and final-publication decision |
+| GPU worker | Weights, expert pool, pipelines, scratch, and live sequence |
+| Active request | Checkpoint, prefill position, pending token, drafts, sampler, decoder, and output count |
+| Retained session | Committed messages, sampling settings, RNG, and context limit |
+| Prefix cache | Reusable checkpoints and prompt logits |
+| Response writer | Bounded queue, socket, and completion decision |
 
-The worker schedules requests round-robin. It runs one prompt chunk or one
-complete decode/verification step before yielding. It copies sequence state
-into reusable CPU vectors when switching owners, then restores the next
-sequence. With only one active request, it keeps the sequence on the GPU.
-Global synchronization events and expert residency are shared and never
-restored from a request checkpoint. This is interleaving, not cross-request
-GPU batching; concurrent service does not imply higher aggregate throughput.
+The worker runs requests round-robin, yielding after one prefill chunk or
+complete decode step. Switching requests saves sequence state to CPU vectors
+and restores the next request. A single active request stays on the GPU.
+Events and expert residency are shared and are never restored from checkpoints.
+Requests are interleaved, not batched together on the GPU.
 
-Checkpoints contain attention KV, QSA indices and compressed blocks, DeltaNet
-recurrent state, convolution/PLE history, tokens, position and MTP state.
-Scratch can be reused only after the previous GPU work completes. Active
-checkpoint reservations include vector growth and sampler workspace; admission
-waits when requests cannot fit together. See the configuration reference for
-what the memory cap covers and which allocations have separate bounds.
+Checkpoints contain KV and QSA state, DeltaNet state, convolution/PLE history,
+tokens, position, and MTP state. Scratch is reusable after GPU completion.
+Admission reserves checkpoint growth and sampler workspace; requests wait
+when their combined reservations cannot fit.
 
-## Sampling and speculation
+## Sampling
 
-Each active request owns its sampler and mutable RNG. Selection applies prompt
-and output occurrence penalties, temperature, top-k and nucleus filtering.
-Unmodified temperature-zero generation retains the GPU argmax fast path and
-adaptive MTP verification. Sampled or penalized generation uses target logits
-with MTP verification disabled, avoiding the biased distribution that would
-result from filtering sampled output through greedy draft acceptance.
+Each request owns its RNG. Selection applies occurrence penalties, temperature,
+top-k, then top-p. Greedy, unpenalized generation uses GPU argmax and adaptive
+MTP. Sampling or penalties disable MTP verification.
 
-The pending next token is part of the decoder. Suspending a request never
-resamples it, and another request cannot consume its random draws. At an
-output-length boundary, the decoder does not draw an unused next token.
-A session continues its committed RNG before sampling the first token of a
-new turn. An explicit request seed restarts it; greedy turns consume no draws.
-Penalty counts are rebuilt from the new turn's complete rendered prompt.
+A suspended request keeps its selected next token. It is not sampled again,
+and other requests cannot consume its random draws. Output-length boundaries
+do not draw unused tokens. Sessions continue their committed RNG unless given
+a new seed; greedy turns consume no draws. Penalty counts come from the full
+rendered prompt.
 
-Exact-prompt prefix hits retain logits so each sampled request makes its own
-selection. Cache compatibility also distinguishes drafting state and checks
-MTP's following-token dependency. Prefix reuse does not retain another
-request's sampled next token or RNG.
+Exact-prefix hits return logits for the request's own sampler. Cache reuse
+checks draft compatibility and MTP's following-token dependency. It never
+reuses another request's sampled token or RNG.
 
-## Cancellation and publication
+## Cancellation and commit
 
-Request registration pins an opaque ID through queueing, execution and output.
-A cancellation flag can be set without entering the GPU worker. The worker
-checks it before admission, before work and after prefill chunks. In-flight
-GPU dispatches finish before sequence state is reused.
+Registration reserves an ID through final output. Cancellation can be set
+without entering the GPU worker. The worker checks before admission and work,
+and after prefill chunks. In-flight GPU work finishes before state is reused.
 
-Session turns are transactions. They pin prior history/settings/RNG, render
-new messages and generate into provisional output. Preparing a successful
-turn reserves history capacity. The writer atomically chooses completion or
-cancellation immediately before the final response; only completion publishes
-the prepared history and RNG. Dropping a failed/cancelled turn releases its
-pin and reservation without altering the committed session.
+A turn pins committed history, settings, and RNG while generating provisional
+output. Preparing completion reserves space for the new history. Immediately
+before the final response, the writer atomically chooses completion or
+cancellation. Only completion commits the prepared session state.
 
-Thus partial streamed text can be discarded after cancellation. Retrying
-starts from the last completed turn, not from the cancelled partial output.
-A disconnect after the completion decision cannot undo an already committed
-turn. Writer queues and socket timeouts bound slow clients independently of
-GPU scheduling; write failures and queue overflow cancel unfinished requests.
+Cancellation or failure releases the reservation and leaves the previous turn
+intact. A retry starts there. Disconnects after commit cannot undo the turn.
+Write failures, full queues, and socket timeouts cancel unfinished requests.
 
-## Retention and context
+## Retention
 
-Sessions and prefix checkpoints have independent byte, count and idle limits.
-Idle sessions can be evicted; in-flight turns are pinned. A retained history
-can survive prefix-cache eviction and be prefetched again on its next turn.
-Completed output is retained as messages, not as a separate GPU checkpoint;
-the next turn restores any matching prompt prefix and prefills the remainder.
-Neither store spills to disk or survives server restart.
+Sessions and prefix checkpoints have separate byte, count, and idle limits.
+In-flight sessions are pinned; idle sessions may be evicted. History can
+survive checkpoint eviction and be prefilled again. Neither store persists
+across server restarts.
 
-The server allocates GPU context buffers once for its maximum context. A
-smaller session/request context limits admission and checkpoint estimates;
-it does not shrink those GPU buffers. Binding separate resident sequence
-buffers could avoid checkpoint copies but remains future work.
+GPU context buffers are allocated once at the server maximum. A smaller
+request limit reduces admission and checkpoint reservations, not GPU buffers.
 
-## Remaining work
+## Limits and tests
 
-Effort/thinking controls and the Responses API remain unsupported and their
-request controls are rejected. The checkpoint template now supplies formatting,
-with `enable_thinking=false` and its own reasoning-history defaults. Exposing
-the template's `low`, `medium` and `xhigh` effort settings is separate work.
-Independent Transformers fixtures cover template rendering and tokenization;
-see [the reference inputs](../tests/fixtures/prompt/README.md).
+Effort controls, the Responses API, sampled MTP, and cross-request GPU batching
+are unsupported. Chat uses the checkpoint template with thinking disabled.
 
-Sampled MTP would require distribution-correct target-sample-and-match or
-proposal/target rejection sampling, with draws consumed only along retained
-positions. Cross-request batching would require sequence-aware kernels.
-Neither optimization is part of the current scheduler.
-
-## Validation
-
-Tests cover distribution/seed behavior, pending-token suspension, session RNG
-continuation and reseeding, cancellation at final publication, history-memory
-failure, expiry and pinning. Metal checks restore all hybrid state byte for
-byte and resume sampling after another request's greedy MTP step. Live smoke
-checks exercise interleaved streams, prefill/queued cancellation, unchanged
-cancelled history, successful continuation and released reservations.
-
-These are correctness checks. They do not establish throughput at different
-concurrency levels or guarantee identical text when expert accumulation order
-changes. See [validation](validation.md) for commands and known limitations.
+Tests cover sampler continuation, pending tokens, commit/cancel ordering,
+retention, memory admission, state restoration, and interleaved HTTP streams.
+See [validation](validation.md) for commands. Concurrency throughput has not
+been established by these correctness tests.
