@@ -14,6 +14,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Rust formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v7
+      - name: Install Rust
+        uses: jdx/mise-action@v4
+        with:
+          install_args: rust
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
   test:
     name: Unit tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
