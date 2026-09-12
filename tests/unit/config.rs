@@ -35,7 +35,7 @@ fn typed_policy_rejects_invalid_or_unimplemented_fields() {
         "[experts]\nresident_bits = 3\nmiss_bits = 2",
         "[experts]\npool_gb = 'unknown'",
         "[limits]\nmemory_gb = nan",
-        "[limits]\nmemory_gb = 26",
+        "[limits]\nmemory_gb = 1e100",
         "[limits]\nqueued_requests = 0",
         "[limits]\nprefix_cache_mib = 2049",
         "[limits]\nmax_output_tokens = 10",
@@ -156,4 +156,38 @@ fn roots_resolve_relative_to_config_and_cli_overrides_survive_reload() {
     assert_eq!(updated.paths().unwrap().data, dir.path().join("override"));
     assert_eq!(updated.model_dir().unwrap(), config.model_dir().unwrap());
     assert_eq!(config.restart_changes(&updated), vec!["server"]);
+}
+
+#[test]
+fn larger_memory_budgets_and_quanta_are_explicit_options() {
+    let defaults = Config::default();
+
+    assert_eq!(defaults.limits.memory_gb, 25.0);
+    assert_eq!(defaults.limits.prefill_quantum, 128);
+    assert_eq!(defaults.limits.prefill_chunk_seconds, 2.0);
+
+    for gb in [26.0, 40.0, 96.0] {
+        for quantum in [128, 1024, 4096] {
+            let text = format!("[limits]\nmemory_gb = {gb}\nprefill_quantum = {quantum}");
+            let config: Config = toml::from_str(&text).unwrap();
+
+            config.validate().unwrap();
+            assert_eq!(config.memory_bytes(), (gb * BYTES_PER_GB as f64) as usize);
+            assert_eq!(config.restart_changes(&defaults), vec!["limits"]);
+        }
+    }
+
+    for quantum in [0, 4097, usize::MAX] {
+        let mut config = defaults.clone();
+        config.limits.prefill_quantum = quantum;
+
+        assert!(config.validate().is_err());
+    }
+
+    for seconds in [-1.0, 60.5, f64::NAN, f64::INFINITY] {
+        let mut config = defaults.clone();
+        config.limits.prefill_chunk_seconds = seconds;
+
+        assert!(config.validate().is_err());
+    }
 }

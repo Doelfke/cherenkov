@@ -103,6 +103,19 @@ Within each quant entry, `cut_experts / eligible_weak_misses` is the cut rate.
 `cut_batches` counts affected batches. Cuts skip computation while the read
 finishes in the background.
 
+### Prefill chunks
+
+The summary's `prefill` object records completed batched-prefill work:
+`chunks`, `tokens`, `min_chunk_tokens`, `max_chunk_tokens`, and `seconds`.
+It also separates ring-reuse waits, n-gram gathering, and GPU command-buffer
+spans for DeltaNet, attention, experts, and MTP. GPU spans can include waits.
+Short prompts processed through the decode kernels are outside these counters.
+
+Counters accumulate across requests and survive cancellation or rollback.
+`seconds` covers completed chunks; request `prefill_seconds` also includes
+checkpoint work and failed work. Expert-read bytes remain in the existing
+precision-specific `prefill` read counters.
+
 ### Phase timing
 
 Phase timing covers decode and MTP. The CPU and GPU intervals overlap.
@@ -158,6 +171,9 @@ its statistics.
 | `context_capacity_tokens` | Engine context capacity |
 | `mtp_enabled` | Whether the draft head is loaded |
 | `expert_pool_bytes`, `expert_pool_slots` | Pool capacity in bytes and records |
+| `device_working_set_bytes` | Metal's recommended working set |
+| `allocation_limit_bytes` | Server budget after CPU reservations; null for unbounded CLI runs |
+| `prefill_reserved_bytes` | Scratch allowance used when sizing the pool |
 | `resident_experts` | Resident record count |
 
 KV/index capacity excludes recurrent state, PLE history, and scratch. These

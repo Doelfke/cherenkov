@@ -4,6 +4,7 @@ use super::{
     Job, UsageStats,
     http::error,
     output::{Frame, Output},
+    pacer::ChunkPacer,
     registry::Ticket,
     request::{PreparedRequest, parse_request},
     sessions::{Store, Turn},
@@ -50,6 +51,8 @@ struct Active<'a> {
     usage: UsageStats,
     config_generation: u64,
     response_bytes: usize,
+    /// Tokens and elapsed seconds from the last step, if eligible for pacing.
+    last_chunk: Option<(usize, f64)>,
 }
 
 pub(super) struct Worker<'a> {
@@ -64,6 +67,7 @@ pub(super) struct Worker<'a> {
     pending: VecDeque<Pending>,
     loaded: Option<String>,
     reserved: usize,
+    pacer: ChunkPacer,
 }
 
 impl<'a> Worker<'a> {
@@ -75,6 +79,9 @@ impl<'a> Worker<'a> {
         state: Arc<State>,
         sessions: Arc<Mutex<Store>>,
     ) -> Self {
+        let limits = &state.config().config.limits;
+        let pacer = ChunkPacer::new(limits.prefill_quantum, limits.prefill_chunk_seconds);
+
         Self {
             activity_snapshot: Default::default(),
             gpu,
@@ -87,6 +94,7 @@ impl<'a> Worker<'a> {
             pending: VecDeque::new(),
             loaded: None,
             reserved: 0,
+            pacer,
         }
     }
 
@@ -234,6 +242,7 @@ impl<'a> Worker<'a> {
                 usage: UsageStats::default(),
                 config_generation: pending.job.settings.generation,
                 response_bytes: limits.response_bytes,
+                last_chunk: None,
             });
         }
 
@@ -271,6 +280,9 @@ impl<'a> Worker<'a> {
         let Some(mut request) = self.active.pop_front() else {
             return;
         };
+        // Both paced and lone-request chunks stay within the reserved quantum.
+        let contended = !self.active.is_empty() || !self.pending.is_empty();
+        let quantum = self.pacer.quantum(contended);
         let result = if request.ticket.cancelled() {
             Ok(true)
         } else {
@@ -280,10 +292,14 @@ impl<'a> Worker<'a> {
                     &mut self.cache,
                     self.tok,
                     &self.state,
-                    self.state.config().config.limits.prefill_quantum,
+                    quantum,
                 )
             })
         };
+
+        if let Some((tokens, seconds)) = request.last_chunk.take() {
+            self.pacer.observe(tokens, seconds);
+        }
 
         if matches!(result, Ok(false)) && !request.ticket.cancelled() {
             self.active.push_back(request);
@@ -320,6 +336,7 @@ impl<'a> Worker<'a> {
         sessions.expire();
         self.state.update(|s| {
             s.active_state_reserved_bytes = self.reserved;
+            s.prefill_chunk_tokens = self.pacer.tokens();
             s.sessions = sessions.stats();
             s.active = self.active.iter().map(Active::stats).collect();
         });
@@ -403,9 +420,10 @@ impl Active<'_> {
 
             state.update(|s| s.prefill_seconds += elapsed);
 
-            let done = result?;
+            let progress = result?;
+            self.last_chunk = progress.pacing_tokens.map(|tokens| (tokens, elapsed));
 
-            if !done || self.ticket.cancelled() {
+            if !progress.done || self.ticket.cancelled() {
                 return Ok(false);
             }
 

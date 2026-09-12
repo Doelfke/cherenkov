@@ -16,6 +16,9 @@ pub struct MemoryStats {
     pub mtp_enabled: bool,
     /// Configured pool capacity; the residency-set backend may use fewer slots.
     pub expert_pool_bytes: usize,
+    pub device_working_set_bytes: usize,
+    pub allocation_limit_bytes: Option<usize>,
+    pub prefill_reserved_bytes: usize,
     pub expert_pool_slots: usize,
     pub resident_experts: usize,
 }
@@ -33,6 +36,9 @@ impl Gpu<'_> {
             context_capacity_tokens: self.max_t,
             mtp_enabled: self.has_mtp(),
             expert_pool_bytes: self.pool_bytes(),
+            device_working_set_bytes: self.ctx.device.recommendedMaxWorkingSetSize() as usize,
+            allocation_limit_bytes: self.ctx.allocation_limit.get(),
+            prefill_reserved_bytes: self.prefill_reserved_bytes,
             expert_pool_slots: self.pool_slots(),
             resident_experts: self.pool_resident(),
         }

@@ -21,6 +21,8 @@ pub struct Observation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Summary {
+    #[serde(default)]
+    pub prefill: crate::qwen4_exp::gpu::prefill::PrefillStats,
     pub streaming: LayerStats,
     pub reads: ReadStats,
     #[serde(flatten)]

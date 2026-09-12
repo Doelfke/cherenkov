@@ -2,21 +2,11 @@
 
 use super::*;
 use crate::units::BYTES_PER_GB;
-
-/// Adaptive budget preserves the measured default: reserve 6 GB for the
-/// rest of the machine after fixed allocations. Explicit max may shrink
-/// until Metal accepts the pool; increasing context reduces this budget.
-fn pool_gb(limit_gb: f64, fixed_gb: f64, request: PoolBudget) -> (f64, bool) {
-    match request {
-        PoolBudget::Max => (limit_gb - fixed_gb - 0.5, true),
-        PoolBudget::Gb(n) => (n, false),
-        PoolBudget::Adaptive => ((limit_gb - fixed_gb - 6.0).clamp(8.0, 20.0), false),
-    }
-}
+use objc2_metal::MTLDevice;
 
 impl<'a> Gpu<'a> {
     pub fn load(p: &'a Packed, max_t: usize, options: &Options) -> Result<Self> {
-        Self::load_bounded(p, max_t, options, 0, None)
+        Self::load_bounded(p, max_t, options, 0, None, prefill::MAX_PREFILL_ROWS)
     }
 
     pub(crate) fn load_bounded(
@@ -25,6 +15,7 @@ impl<'a> Gpu<'a> {
         options: &Options,
         reserve: usize,
         memory_bytes: Option<usize>,
+        prefill_rows: usize,
     ) -> Result<Self> {
         options.validate()?;
         p.manifest.experts.validate_dimensions()?;
@@ -400,39 +391,32 @@ impl<'a> Gpu<'a> {
         };
         let n_records = p.manifest.experts.layers * p.manifest.experts.experts;
         let stride = p.manifest.experts.record_stride as usize;
-        let (limit_gb, fixed_gb) = {
-            use objc2_metal::MTLDevice as _;
+        let n_rows = c.num_hidden_layers + 1;
+        let slot_tab = ctx.new_buffer(n_rows * SLOT_STRIDE * 8)?;
+        let wmap = ctx.new_buffer(n_rows * MAX_NB * SLOT_STRIDE * 4)?;
+        let ring = ctx.new_buffer(prefill::RING * stride)?;
 
-            (
-                ctx.device.recommendedMaxWorkingSetSize() as f64 / BYTES_PER_GB as f64,
-                ctx.device.currentAllocatedSize() as f64 / BYTES_PER_GB as f64,
-            )
-        };
-        let (mut gb, shrink) = pool_gb(
-            limit_gb,
-            fixed_gb + reserve as f64 / BYTES_PER_GB as f64,
-            options.pool_gb,
+        // A capped diagnostic trunk does not retain the normal adjacent-pass layout.
+        let (phase_timer, gpu_timing) = super::phases::PhaseTimer::initialize(
+            &ctx,
+            p.manifest.experts.layers,
+            layer_cap() >= layers.len(),
         );
+        let mut activity = ExpertActivity::new(&p.manifest.experts);
+        activity.gpu_timestamps_available = phase_timer.is_some();
+        activity.gpu_timing = gpu_timing;
 
-        if let Some(limit) = allocation_limit {
-            // Keep prefill headroom outside the fixed expert allocation. The
-            // allocation guard also bounds subsequent scratch growth.
-            let available = limit as f64 / BYTES_PER_GB as f64 - fixed_gb - 1.0;
-
-            anyhow::ensure!(
-                available > 0.0,
-                "fixed model state leaves no expert/prefill capacity"
-            );
-
-            if matches!(options.pool_gb, PoolBudget::Gb(_)) {
-                anyhow::ensure!(
-                    gb <= available,
-                    "explicit expert pool exceeds server memory budget with prefill reserve"
-                );
-            } else {
-                gb = gb.min(available);
-            }
-        }
+        let prefill_bytes =
+            prefill::allocation::scratch_bytes(c, max_t, prefill_rows.min(max_t).max(1), false)?;
+        let memory = budget::PoolMemory {
+            device: ctx.device.recommendedMaxWorkingSetSize() as usize,
+            fixed: ctx.device.currentAllocatedSize(),
+            host: reserve,
+            allocation_limit,
+            prefill: prefill_bytes,
+        };
+        let mut pool_bytes = memory.bytes(options.pool_gb)?;
+        let shrink = matches!(options.pool_gb, PoolBudget::Max);
 
         // CHERENKOV_POOL=set puts the pool in a residency set over the
         // file mapping (page cache as a second tier); the default copies
@@ -493,8 +477,13 @@ impl<'a> Gpu<'a> {
             _ => stride,
         };
         let mut res = loop {
-            let slots = (((gb * BYTES_PER_GB as f64) / slot_stride as f64).max(64.0) as usize)
-                .min(n_records);
+            let minimum = 64.min(n_records);
+            let slots = (pool_bytes / slot_stride).min(n_records);
+
+            ensure!(
+                slots >= minimum,
+                "expert pool budget cannot hold {minimum} records"
+            );
 
             match residency::Pool::new(
                 &ctx,
@@ -506,10 +495,12 @@ impl<'a> Gpu<'a> {
                 copy,
             ) {
                 Ok(res) => break res,
-                Err(_) if shrink && gb > 8.5 => {
-                    gb -= 0.5;
+                Err(_) if shrink && pool_bytes > BYTES_PER_GB / 2 => {
+                    pool_bytes -= BYTES_PER_GB / 2;
                 }
-                Err(e) => return Err(e.context(format!("allocating a {gb:.1} GB expert pool"))),
+                Err(e) => {
+                    return Err(e.context(format!("allocating a {pool_bytes}-byte expert pool")));
+                }
             }
         };
         // Misses read through the page cache (their pages are what the
@@ -562,20 +553,6 @@ impl<'a> Gpu<'a> {
                 ctx.device.newSharedEvent().context("shared event")?,
             )
         };
-        let n_rows = c.num_hidden_layers + 1;
-        let slot_tab = ctx.new_buffer(n_rows * SLOT_STRIDE * 8)?;
-        let wmap = ctx.new_buffer(n_rows * MAX_NB * SLOT_STRIDE * 4)?;
-        let ring = ctx.new_buffer(prefill::RING * stride)?;
-
-        // A capped diagnostic trunk does not retain the normal adjacent-pass layout.
-        let (phase_timer, gpu_timing) = super::phases::PhaseTimer::initialize(
-            &ctx,
-            p.manifest.experts.layers,
-            layer_cap() >= layers.len(),
-        );
-        let mut activity = ExpertActivity::new(&p.manifest.experts);
-        activity.gpu_timestamps_available = phase_timer.is_some();
-        activity.gpu_timing = gpu_timing;
 
         Ok(Gpu {
             embed: q(&format!("{m}.embed_tokens"))?,
@@ -664,6 +641,7 @@ impl<'a> Gpu<'a> {
             dispatch_count: std::cell::Cell::new(0),
             pf: None,
             ring,
+            prefill_reserved_bytes: prefill_bytes,
             prefill_stats: Vec::new(),
         })
     }

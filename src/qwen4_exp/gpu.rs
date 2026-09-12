@@ -32,6 +32,7 @@ use std::ptr::NonNull;
 
 mod activity;
 mod attention;
+mod budget;
 mod decode;
 mod deltanet;
 mod dispatch;
@@ -547,6 +548,7 @@ pub struct Gpu<'a> {
     /// Per prefill chunk: tokens, seconds, expert records streamed,
     /// seconds waiting on fetches, and GPU seconds in (DeltaNet blocks,
     /// attention blocks, expert streams, MTP).
+    prefill_reserved_bytes: usize,
     pub prefill_stats: Vec<prefill::ChunkStats>,
 }
 

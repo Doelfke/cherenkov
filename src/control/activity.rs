@@ -89,6 +89,7 @@ pub(super) fn summary(activity: &ExpertActivity) -> Summary {
     let stages = phase.resident_seconds + phase.fetched_stage_seconds;
 
     Summary {
+        prefill: activity.prefill,
         streaming: total,
         reads,
         rates: Rates {

@@ -345,3 +345,31 @@ fn stats_export_timer_initialization_failures() {
         json!({"status": "failed", "error": "timestamp allocation failed"})
     );
 }
+
+#[test]
+fn summary_exports_prefill_chunks_alongside_completed_reads() {
+    let state = populated_state();
+
+    state.update(|s| {
+        s.activity.prefill = crate::qwen4_exp::gpu::prefill::PrefillStats {
+            chunks: 3,
+            tokens: 275,
+            min_chunk_tokens: 91,
+            max_chunk_tokens: 92,
+            seconds: 5.0,
+            ..Default::default()
+        };
+        s.activity.layers[0].quant[2].reads.prefill.completed_bytes = 9_007_199_254_740_993;
+    });
+
+    let summary = state.summary().unwrap();
+
+    assert_eq!(summary["prefill"]["chunks"], 3);
+    assert_eq!(summary["prefill"]["tokens"], 275);
+    assert_eq!(summary["prefill"]["min_chunk_tokens"], 91);
+    assert_eq!(summary["prefill"]["max_chunk_tokens"], 92);
+    assert_eq!(
+        summary["reads"]["completed_bytes"],
+        9_007_199_254_740_993_u64
+    );
+}

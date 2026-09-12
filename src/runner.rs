@@ -268,17 +268,23 @@ fn prefill_prompt(
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(64);
+    let engine = !prepared && ids.len() >= pf_min;
+    let prefill_fit = if engine {
+        gpu.prefill_rows_fit(check || std::env::var_os("CHERENKOV_DUMP_ARGMAX").is_some())?
+    } else {
+        1
+    };
     let mut pf_chunk: usize = std::env::var("CHERENKOV_PREFILL_CHUNK")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| gpu.prefill_rows_fit())
+        .unwrap_or(prefill_fit)
+        .min(prefill_fit)
         .max(1);
 
     if check {
         pf_chunk = pf_chunk.min(1024);
     }
 
-    let engine = !prepared && ids.len() >= pf_min;
     // Debug: CHERENKOV_DUMP_ARGMAX=path writes "pos argmax maxlogit" for
     // every prompt row, to diff the two prefill paths position by position.
     let dump_argmax = std::env::var("CHERENKOV_DUMP_ARGMAX").ok();
