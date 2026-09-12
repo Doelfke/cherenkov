@@ -586,8 +586,13 @@ impl Active<'_> {
         }
 
         // Held-back bytes (trailing whitespace, a failed marker region) belong
-        // to the ordinary text; a parsed call keeps them out of the stream.
+        // to the ordinary text: publish them as a text frame before counting
+        // them, so a streaming client never loses held response bytes.
         if let Some(terminal) = &terminal {
+            if !terminal.content.is_empty() {
+                self.output.send(Frame::Text(terminal.content.clone()))?;
+            }
+
             self.text.push_str(&terminal.content);
         }
 
@@ -604,7 +609,10 @@ impl Active<'_> {
             Phase::Decode(d) => (d.finish_reason.unwrap_or("cancelled"), d.rng()),
             _ => ("cancelled", None),
         };
-        let reason = if tool_calls.is_some() {
+        // Recovered calls get the tool_calls finish reason only when the model
+        // stopped on its own; a generation cut off by the token budget keeps
+        // its "length" reason so the client learns output was truncated.
+        let reason = if tool_calls.is_some() && reason == "stop" {
             "tool_calls"
         } else {
             reason
