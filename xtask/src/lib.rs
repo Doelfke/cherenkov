@@ -1,5 +1,6 @@
 //! Repository automation; no dependency on the inference engine or a GPU.
 
+pub mod authors;
 pub mod bench;
 pub mod capture;
 pub mod docs;
