@@ -20,6 +20,11 @@ pub(super) fn id(prefix: &str) -> String {
     format!("{prefix}-{:032x}", rand::rng().random::<u128>())
 }
 
+/// OpenAI-style identifier minted for one decoded model tool call.
+pub(super) fn tool_call_id() -> String {
+    format!("call_{:016x}", rand::rng().random::<u64>())
+}
+
 #[derive(Default)]
 pub(super) struct Registry {
     entries: Mutex<HashMap<String, Arc<AtomicU8>>>,

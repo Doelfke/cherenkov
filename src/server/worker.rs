@@ -4,9 +4,10 @@ use super::{
     Job,
     http::error,
     output::{Frame, Output},
-    registry::Ticket,
+    registry::{Ticket, tool_call_id},
     request::{PreparedRequest, parse_request},
     sessions::{Store, Turn},
+    tool_call::{FallbackReason, ToolCallOutputDecoder, WireToolCall},
 };
 use crate::units::BYTES_PER_MIB;
 use crate::{
@@ -49,6 +50,7 @@ struct Active<'a> {
     session: Option<Turn>,
     output: Output,
     text_decoder: Box<dyn FnMut(u32) -> Result<Option<String>> + 'a>,
+    tool_decoder: Option<ToolCallOutputDecoder>,
     text: String,
     cached: usize,
     config_generation: u64,
@@ -211,6 +213,16 @@ impl<'a> Worker<'a> {
             self.state.begin();
 
             self.reserved += pending.reservation;
+            let tool_decoder = pending
+                .prepared
+                .request
+                .tool_contract
+                .clone()
+                .map(|contract| {
+                    // Recovery is always on: complete calls stand, and truncated
+                    // or suffixed output never poisons the visible text.
+                    ToolCallOutputDecoder::new(contract, true)
+                });
             let mut decoder = self.tok.inner.decode_stream(false);
             let output = Output::new(
                 pending.job.stream,
@@ -233,6 +245,7 @@ impl<'a> Worker<'a> {
                         .step(token)
                         .map_err(|e| anyhow::anyhow!("decode: {e}"))
                 }),
+                tool_decoder,
                 text: String::new(),
                 cached: 0,
                 config_generation: pending.job.settings.generation,
@@ -465,12 +478,21 @@ impl Active<'_> {
             ensure!(!self.ticket.cancelled(), "request cancelled");
 
             if let Some(delta) = (self.text_decoder)(token)? {
-                ensure!(
-                    self.text.len() + delta.len() <= self.response_bytes,
-                    "response exceeds response_bytes"
-                );
-                self.text.push_str(&delta);
-                self.output.send(Frame::Text(delta))?;
+                // While tools are active, the decoder holds back bytes that
+                // could belong to a terminal tool-call suffix.
+                let visible = match self.tool_decoder.as_mut() {
+                    Some(decoder) => decoder.feed(&delta),
+                    None => delta,
+                };
+
+                if !visible.is_empty() {
+                    ensure!(
+                        self.text.len() + visible.len() <= self.response_bytes,
+                        "response exceeds response_bytes"
+                    );
+                    self.text.push_str(&visible);
+                    self.output.send(Frame::Text(visible))?;
+                }
             }
 
             state.token();
@@ -503,16 +525,67 @@ impl Active<'_> {
             "response exceeds response_bytes"
         );
 
-        if let Some(tail) = full
-            .strip_prefix(&self.text)
-            .filter(|tail| !tail.is_empty())
-        {
-            self.output.send(Frame::Text(tail.to_owned()))?;
+        let terminal = self.tool_decoder.take().map(|decoder| decoder.finish());
+
+        let tool_calls: Option<Vec<WireToolCall>> = terminal
+            .as_ref()
+            .filter(|terminal| !terminal.tool_calls.is_empty())
+            .map(|terminal| {
+                terminal
+                    .tool_calls
+                    .iter()
+                    .map(|call| WireToolCall {
+                        id: tool_call_id(),
+                        name: call.name.clone(),
+                        arguments: call.arguments_json.clone(),
+                    })
+                    .collect()
+            });
+
+        if let (Some(terminal), Some(calls)) = (&terminal, &tool_calls) {
+            let d = &terminal.diagnostics;
+
+            if d.fallback_reason != FallbackReason::None {
+                eprintln!(
+                    "serve {}: tool calls {}x (recovered: {:?})",
+                    self.ticket.id,
+                    calls.len(),
+                    d.fallback_reason
+                );
+            } else if d.schema_mismatch_arguments > 0 || d.empty_arguments_omitted > 0 {
+                eprintln!(
+                    "serve {}: tool calls {}x ({} schema mismatches, {} empty arguments omitted)",
+                    self.ticket.id,
+                    calls.len(),
+                    d.schema_mismatch_arguments,
+                    d.empty_arguments_omitted
+                );
+            }
+        }
+
+        // Held-back bytes (trailing whitespace, a failed marker region) belong
+        // to the ordinary text; a parsed call keeps them out of the stream.
+        if let Some(terminal) = &terminal {
+            self.text.push_str(&terminal.content);
+        }
+
+        if tool_calls.is_none() {
+            if let Some(tail) = full
+                .strip_prefix(&self.text)
+                .filter(|tail| !tail.is_empty())
+            {
+                self.output.send(Frame::Text(tail.to_owned()))?;
+            }
         }
 
         let (reason, rng) = match &self.phase {
             Phase::Decode(d) => (d.finish_reason.unwrap_or("cancelled"), d.rng()),
             _ => ("cancelled", None),
+        };
+        let reason = if tool_calls.is_some() {
+            "tool_calls"
+        } else {
+            reason
         };
         let usage = json!({
             "prompt_tokens": self.prepared.ids.len(),
@@ -525,7 +598,7 @@ impl Active<'_> {
         } else {
             self.session
                 .take()
-                .map(|t| t.prepare(&full, rng))
+                .map(|t| t.prepare(&full, rng, tool_calls.as_deref()))
                 .transpose()?
         };
 
@@ -534,6 +607,7 @@ impl Active<'_> {
             reason,
             usage,
             turn: turn.map(Box::new),
+            tool_calls,
         })
     }
 }

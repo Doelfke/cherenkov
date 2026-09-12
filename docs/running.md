@@ -47,11 +47,31 @@ argmax MTP verification. `n` must be 1.
 
 Chat accepts text messages with system/developer/user/assistant roles;
 text completions accept a string prompt. `max_completion_tokens` and
-`max_tokens` are supported. Stop strings, tool calling, JSON schema
-constraints, images, reasoning effort/template variables, and the Responses
-API are not implemented. Unsupported generation controls return an error.
+`max_tokens` are supported. Stop strings, JSON schema constraints, images,
+reasoning effort/template variables, and the Responses API are not
+implemented. Unsupported generation controls return an error.
 Requests use Content-Length; chunked request bodies are not supported.
 CLI-only `--raw`, `--check`, and `--repeat` do not apply to the server.
+
+Chat also accepts `tools` and `tool_choice`. Tools must be function
+definitions (`type` `function`, a name matching `[A-Za-z0-9_-]{1,64}`, and an
+object `parameters` schema); `strict: true` and non-object schemas are
+rejected. `tool_choice` accepts `auto` (default) and `none`; `required` and a
+specific-function choice are rejected because the checkpoint cannot be
+obligated to call a function. The checkpoint renders the tools block and
+emits calls as XML-style markup. The server parses that markup
+incrementally, holds back bytes that could belong to a terminal marker, and
+emits `tool_calls` with a `tool_calls` finish reason when calls are
+completed. When a tool call is produced, `content` is empty and the
+assistant message retains the structured calls for the next turn; `role`
+`tool` messages feed the tool response back into the conversation.
+A malformed tool-call region falls back to serving the model output
+verbatim as content. When a recovered call discards a truncated or
+suffixed tail or the parser keeps arguments that violate a declared
+parameter type, the server logs a one-line diagnostic. Retained sessions
+store the decoded argument objects; fresh requests send `arguments` as
+the JSON string. `parallel_tool_calls` is accepted only when it is
+`true` while tools are enabled or absent.
 
 CLI and chat rendering load `chat_template.jinja` from the model directory,
 falling back to the string or named `default` template in `tokenizer_config.json`.

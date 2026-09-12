@@ -3,6 +3,7 @@
 use super::{
     ApiKind, MODEL,
     http::{respond, sse},
+    tool_call::WireToolCall,
 };
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -76,8 +77,38 @@ impl<'a, W: Write> Response<'a, W> {
         Ok(())
     }
 
-    pub(super) fn finish(&mut self, text: &str, finish_reason: &str, usage: Value) -> Result<()> {
+    pub(super) fn finish(
+        &mut self,
+        text: &str,
+        tool_calls: Option<&[WireToolCall]>,
+        finish_reason: &str,
+        usage: Value,
+    ) -> Result<()> {
         if self.streaming {
+            // Tool calls arrive as one indexed delta chunk, then an empty
+            // delta carries the terminal reason.
+            if self.kind == ApiKind::Chat {
+                if let Some(calls) = tool_calls.filter(|calls| !calls.is_empty()) {
+                    let items = calls
+                        .iter()
+                        .enumerate()
+                        .map(|(index, call)| {
+                            json!({
+                                "id": call.id,
+                                "type": "function",
+                                "function": {"name": call.name, "arguments": call.arguments},
+                                "index": index,
+                            })
+                        })
+                        .collect::<Vec<Value>>();
+
+                    let mut choice = self.delta_choice(None, None);
+                    choice["delta"]["tool_calls"] = Value::Array(items);
+
+                    self.send_chunk(choice)?;
+                }
+            }
+
             self.send_chunk(self.delta_choice(None, Some(finish_reason)))?;
 
             if self.include_usage {
@@ -94,7 +125,28 @@ impl<'a, W: Write> Response<'a, W> {
 
             match self.kind {
                 ApiKind::Chat => {
-                    choice["message"] = json!({"role":"assistant", "content":text});
+                    let calls = tool_calls.filter(|calls| !calls.is_empty());
+                    let mut message = json!({"role":"assistant", "content":text});
+
+                    if let Some(calls) = calls {
+                        if text.is_empty() {
+                            message["content"] = Value::Null;
+                        }
+                        message["tool_calls"] = Value::Array(
+                            calls
+                                .iter()
+                                .map(|call| {
+                                    json!({
+                                        "id": call.id,
+                                        "type": "function",
+                                        "function": {"name": call.name, "arguments": call.arguments},
+                                    })
+                                })
+                                .collect::<Vec<Value>>(),
+                        );
+                    }
+
+                    choice["message"] = message;
                 }
                 ApiKind::Completion => choice["text"] = json!(text),
             }

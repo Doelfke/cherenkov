@@ -36,7 +36,8 @@ to reset a configured pool budget, or `--no-eos=false` to restore EOS stopping.
 `config reload` rereads the original file and reapplies the original CLI
 overrides. It validates the complete candidate before publishing anything.
 Only `[defaults]` is reloadable: output length, EOS handling, streaming and
-usage-stream defaults, and `[defaults.sampling]`. Every HTTP request captures
+usage-stream defaults, and `[defaults.sampling]`.
+Every HTTP request captures
 its configuration
 before reading its body; queued/active requests retain that generation.
 Request JSON can override sampling, output length, streaming and usage defaults,

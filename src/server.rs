@@ -26,6 +26,7 @@ mod request;
 mod response;
 mod routes;
 mod sessions;
+mod tool_call;
 mod worker;
 
 use http::error;

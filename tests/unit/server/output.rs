@@ -21,7 +21,7 @@ fn prepared_output(request: &str) -> PreparedOutput {
     let ticket = registry.register(Some(request), 1).expect("test request");
     let body = message(&id, "Hello");
     let turn = begin_turn(&store, &body, &ticket.id)
-        .prepare("Hi", None)
+        .prepare("Hi", None, None)
         .expect("prepared turn");
 
     PreparedOutput {
@@ -37,6 +37,7 @@ fn terminal(turn: Commit) -> Frame {
         text: "Hi".into(),
         reason: "length",
         usage: json!({"completion_tokens":1}),
+        tool_calls: None,
         turn: Some(Box::new(turn)),
     }
 }

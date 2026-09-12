@@ -107,8 +107,12 @@ buffers could avoid checkpoint copies but remains future work.
 
 ## Remaining work
 
-Effort/thinking controls and the Responses API remain unsupported and their
-request controls are rejected. The checkpoint template now supplies formatting,
+Tool calling is supported through the checkpoint markup. The request side
+accepts function tools and `tool_choice` `auto`/`none`; the response side
+parses the model's XML-style calls, holds back a possible terminal marker
+while streaming, and emits `tool_calls` with the matching finish reason.
+Stop strings, effort/thinking controls and the Responses API remain
+unsupported and their request controls are rejected. The checkpoint template now supplies formatting,
 with `enable_thinking=false` and its own reasoning-history defaults. Exposing
 the template's `low`, `medium` and `xhigh` effort settings is separate work.
 Independent Transformers fixtures cover template rendering and tokenization;

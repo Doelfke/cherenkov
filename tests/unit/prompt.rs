@@ -103,7 +103,7 @@ fn chat_adapter_preserves_reference_bytes_and_safe_unicode_prefixes() {
         }
 
         let messages = case.context["messages"].as_array().unwrap();
-        let prompt = template.chat(messages).unwrap();
+        let prompt = template.chat(messages, None).unwrap();
 
         assert_eq!(Some(&prompt.text), case.text.as_ref(), "{}", case.id);
 
@@ -120,7 +120,10 @@ fn cli_and_chat_share_the_loaded_template_and_developer_alias() {
     let template = fixture_template();
     let cli = template.user("  Describe a café.  ").unwrap();
     let chat = template
-        .chat(&[json!({"role":"user", "content":"  Describe a café.  "})])
+        .chat(
+            &[json!({"role":"user", "content":"  Describe a café.  "})],
+            None,
+        )
         .unwrap();
 
     assert_eq!(cli.text, chat.text);
@@ -130,10 +133,10 @@ fn cli_and_chat_share_the_loaded_template_and_developer_alias() {
         json!({"role":"developer", "content":"Be brief."}),
         json!({"role":"user", "content":"Hi"}),
     ];
-    let developer = template.chat(&messages).unwrap();
+    let developer = template.chat(&messages, None).unwrap();
     messages[0]["role"] = json!("system");
 
-    assert_eq!(developer.text, template.chat(&messages).unwrap().text);
+    assert_eq!(developer.text, template.chat(&messages, None).unwrap().text);
 }
 
 #[test]
@@ -178,4 +181,130 @@ fn raw_prompt_has_no_template_or_cache_boundaries() {
 
     assert_eq!(prompt.text, "plain text");
     assert_eq!(prompt.boundaries, [0, 0]);
+}
+
+fn weather_tool() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"]
+            },
+            "strict": false
+        }
+    })
+}
+
+#[test]
+fn chat_tools_render_the_tool_block() {
+    let template = fixture_template();
+    let before = template
+        .chat(&[json!({"role":"user","content":"Hi"})], None)
+        .unwrap();
+    let after = template
+        .chat(
+            &[json!({"role":"user","content":"Hi"})],
+            Some(&[weather_tool()]),
+        )
+        .unwrap();
+
+    assert!(!before.text.contains("# Tools"));
+    assert!(after.text.contains("# Tools"));
+    assert!(after.text.contains("<tools>"));
+    assert!(after.text.contains("\"name\":\"get_weather\""));
+    assert!(after.text.contains("required"));
+    assert!(
+        after
+            .text
+            .contains("If you choose to call a function ONLY reply in the following format")
+    );
+}
+
+#[test]
+fn chat_history_renders_assistant_tool_calls_and_tool_responses() {
+    let template = fixture_template();
+    let messages = vec![
+        json!({"role":"user","content":"Weather in Paris?"}),
+        json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name":"get_weather","arguments":{"city":"Paris"}}
+            }]
+        }),
+        json!({"role":"tool","tool_call_id":"call_1","content":"Sunny, 24C"}),
+        json!({"role":"user","content":"And tomorrow?"}),
+    ];
+    let prompt = template.chat(&messages, Some(&[weather_tool()])).unwrap();
+
+    assert!(prompt.text.contains("<tool_call>\n<function=get_weather>"));
+    assert!(
+        prompt
+            .text
+            .contains("<parameter=city>\nParis\n</parameter>")
+    );
+    assert!(prompt.text.contains("</function>\n</tool_call>"));
+    assert!(
+        prompt
+            .text
+            .contains("<tool_response>\nSunny, 24C\n</tool_response>")
+    );
+}
+
+#[test]
+fn chat_history_rejects_malformed_tool_calls() {
+    let template = fixture_template();
+    let ok = |args: Value| {
+        json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name":"get_weather","arguments":args}
+            }]
+        })
+    };
+
+    // Well-formed history is accepted.
+    let good = template
+        .chat(
+            &[
+                json!({"role":"user","content":"Hi"}),
+                ok(Value::String(json!({"city":"Paris"}).to_string())),
+            ],
+            None,
+        )
+        .unwrap();
+
+    assert!(good.text.contains("<tool_call>\n<function=get_weather>"));
+
+    // The `arguments` wire form must be a string that decodes to an object.
+    for bad_args in [json!(1), json!("[1,2]"), json!("not json")] {
+        let messages = vec![json!({"role":"user","content":"Hi"}), ok(bad_args.clone())];
+
+        assert!(template.chat(&messages, None).is_err(), "{bad_args}");
+    }
+
+    // Retained session history carries the decoded object form, which is
+    // accepted on the turn-back path.
+    let history = vec![
+        json!({"role":"user","content":"Hi"}),
+        json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name":"get_weather","arguments":{"city":"Paris"}}
+            }]
+        }),
+    ];
+
+    assert!(template.chat(&history, None).is_ok());
 }

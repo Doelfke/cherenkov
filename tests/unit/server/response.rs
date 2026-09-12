@@ -44,7 +44,7 @@ fn response_wrapper_preserves_endpoint_and_stream_formats() {
                 response.text("Hello ").unwrap();
                 response.text("\u{e9}").unwrap();
                 response
-                    .finish("Hello \u{e9}", "stop", usage.clone())
+                    .finish("Hello \u{e9}", None, "stop", usage.clone())
                     .unwrap();
 
                 let wire = String::from_utf8(output).unwrap();
@@ -95,4 +95,131 @@ fn expected_stream(
     expected.push_str("data: [DONE]\n\n");
 
     expected
+}
+
+fn tool_call_fixture() -> Vec<WireToolCall> {
+    vec![
+        WireToolCall {
+            id: "call_1".to_owned(),
+            name: "get_weather".to_owned(),
+            arguments: json!({"city":"Paris"}).to_string(),
+        },
+        WireToolCall {
+            id: "call_2".to_owned(),
+            name: "set_timer".to_owned(),
+            arguments: "{}".to_owned(),
+        },
+    ]
+}
+
+#[test]
+fn chat_stream_emits_tool_calls_chunk_then_terminal_reason() {
+    let calls = tool_call_fixture();
+    let usage = json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":5});
+    let mut output: Vec<u8> = Vec::new();
+    let mut response =
+        Response::for_writer(&mut output, ApiKind::Chat, "chatcmpl-tc", 123, true, false);
+
+    response.start().unwrap();
+    response
+        .finish("", Some(&calls), "tool_calls", usage)
+        .unwrap();
+
+    let wire = String::from_utf8(output).unwrap();
+    let (headers, body) = wire.split_once("\r\n\r\n").unwrap();
+
+    assert!(headers.contains("Content-Type: text/event-stream"));
+
+    // One indexed tool_calls delta chunk before the empty-delta finish chunk.
+    let role_chunk =
+        json!({"index":0,"finish_reason":null,"delta":{"content":"","role":"assistant"}});
+    let call_chunk = json!({
+        "index":0,
+        "finish_reason":null,
+        "delta":{"tool_calls":[
+            json!({"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"},"index":0}),
+            json!({"id":"call_2","type":"function","function":{"name":"set_timer","arguments":"{}"},"index":1}),
+        ]}
+    });
+    let finish_chunk = json!({"index":0,"finish_reason":"tool_calls","delta":{}});
+
+    let mut expected = String::new();
+
+    for choice in [role_chunk, call_chunk, finish_chunk] {
+        let chunk = json!({"id":"chatcmpl-tc","object":"chat.completion.chunk","created":123,"model":"cherenkov","choices":[choice]});
+        expected.push_str(&format!("data: {chunk}\n\n"));
+    }
+
+    expected.push_str("data: [DONE]\n\n");
+    assert_eq!(body, &expected);
+}
+
+#[test]
+fn chat_object_nulls_content_when_only_tool_calls_are_present() {
+    let calls = tool_call_fixture();
+    let usage = json!({"prompt_tokens":3,"completion_tokens":2,"total_tokens":5});
+    let mut output: Vec<u8> = Vec::new();
+    let mut response = Response::for_writer(
+        &mut output,
+        ApiKind::Chat,
+        "chatcmpl-tco",
+        123,
+        false,
+        false,
+    );
+
+    response.start().unwrap();
+    response
+        .finish("", Some(&calls), "tool_calls", usage)
+        .unwrap();
+
+    let wire = String::from_utf8(output).unwrap();
+    let (_headers, body) = wire.split_once("\r\n\r\n").unwrap();
+    let parsed: Value = serde_json::from_str(body).unwrap();
+    let message = &parsed["choices"][0]["message"];
+
+    // Empty visible text with structured calls: content becomes null and the
+    // calls move into the message.
+    assert_eq!(message["content"], Value::Null);
+    assert_eq!(parsed["choices"][0]["finish_reason"], json!("tool_calls"));
+    let tool_calls = message["tool_calls"].as_array().unwrap();
+    assert_eq!(tool_calls.len(), 2);
+    assert_eq!(tool_calls[0]["id"], json!("call_1"));
+    assert_eq!(tool_calls[0]["type"], json!("function"));
+    assert_eq!(tool_calls[0]["function"]["name"], json!("get_weather"));
+    assert_eq!(
+        tool_calls[0]["function"]["arguments"],
+        json!("{\"city\":\"Paris\"}")
+    );
+}
+
+#[test]
+fn chat_object_keeps_string_content_without_tool_calls() {
+    let mut output: Vec<u8> = Vec::new();
+    let mut response = Response::for_writer(
+        &mut output,
+        ApiKind::Chat,
+        "chatcmpl-tcp",
+        123,
+        false,
+        false,
+    );
+
+    response.start().unwrap();
+    response
+        .finish(
+            "",
+            None,
+            "stop",
+            json!({"prompt_tokens":3,"completion_tokens":0,"total_tokens":3}),
+        )
+        .unwrap();
+
+    let wire = String::from_utf8(output).unwrap();
+    let (_headers, body) = wire.split_once("\r\n\r\n").unwrap();
+    let parsed: Value = serde_json::from_str(body).unwrap();
+    let message = &parsed["choices"][0]["message"];
+
+    assert_eq!(message["content"], json!(""));
+    assert!(message.get("tool_calls").is_none());
 }

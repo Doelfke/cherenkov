@@ -13,7 +13,7 @@ fn cancelled_turn_does_not_change_history_settings_or_rng() {
     body["temperature"] = json!(1.2);
     let turn = begin_turn(&store, &body, "req-1");
     let prepared = turn
-        .prepare("unfinished", Some(StdRng::seed_from_u64(99)))
+        .prepare("unfinished", Some(StdRng::seed_from_u64(99)), None)
         .unwrap();
 
     drop(prepared); // Cancellation after a step, before publishing the final response.
@@ -30,7 +30,7 @@ fn completed_turn_retains_sampling_and_incremental_history() {
 
     assert_eq!(turn.input.sampling.temperature, 0.7);
     assert!(Turn::begin(&store, &body, "req-2", 4096).is_err());
-    turn.prepare("Hi", None).unwrap().publish();
+    turn.prepare("Hi", None, None).unwrap().publish();
 
     let next = message(&id, "Continue");
     let turn = begin_turn(&store, &next, "req-3");
@@ -67,14 +67,16 @@ fn random_stream_continues_across_turns_and_greedy_does_not_reset_it() {
     let body = message(&id, "One");
     let turn = begin_turn(&store, &body, "one");
 
-    turn.prepare("First", Some(rng.clone())).unwrap().publish();
+    turn.prepare("First", Some(rng.clone()), None)
+        .unwrap()
+        .publish();
 
     let mut body = message(&id, "Two");
     body["temperature"] = json!(0);
     let turn = begin_turn(&store, &body, "two");
 
     assert_eq!(turn.rng, Some(rng.clone()));
-    turn.prepare("Second", None).unwrap().publish();
+    turn.prepare("Second", None, None).unwrap().publish();
 
     let mut body = message(&id, "Three");
     body["temperature"] = json!(0.7);
@@ -102,7 +104,7 @@ fn history_budget_failure_releases_the_pin_and_reservation() {
     let body = message(&id, "Hello");
     let turn = begin_turn(&store, &body, "large");
 
-    assert!(turn.prepare(&"x".repeat(256), None).is_err());
+    assert!(turn.prepare(&"x".repeat(256), None, None).is_err());
 
     let mut guard = store.lock().unwrap();
 
