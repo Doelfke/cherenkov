@@ -44,14 +44,15 @@ committed sampling settings across reloads. `--repack` runs only at startup.
 
 | Setting in `[limits]` | Default | Purpose |
 | --- | --- | --- |
-| `memory_gb` | 25 | Decimal GB for GPU buffers and reserved cache/session memory; maximum 25 |
+| `memory_gb` | 25 | Decimal GB for GPU buffers and reserved cache/session memory |
 | `context_tokens` | 2048 | Shared GPU context capacity |
 | `prefix_cache_mib` | 512 | Prefix checkpoint budget; maximum 2048 MiB |
 | `cache_max_entries` | 16 | Prefix checkpoint count |
 | `cache_idle_seconds` | 900 | Prefix idle expiry; 0 disables expiry |
 | `active_requests` | 2 | Requests progressing in turn on the GPU |
 | `active_state_mib` | 1024 | Active checkpoints and request workspace |
-| `prefill_quantum` | 128 | Prompt tokens processed before yielding |
+| `prefill_quantum` | 128 | Maximum prompt tokens per chunk; 1 to 4096 |
+| `prefill_chunk_seconds` | 2 | Target chunk duration when requests compete; 0 disables pacing |
 | `max_sessions` | 16 | Retained conversations; 0 disables retention |
 | `session_history_mib` | 16 | Retained history budget |
 | `session_idle_seconds` | 900 | Session idle expiry; 0 disables expiry |
@@ -62,14 +63,37 @@ committed sampling settings across reloads. `--repack` runs only at startup.
 | `max_output_tokens` | 262144 | Output ceiling, also limited by remaining context |
 
 `memory_gb` excludes general process overhead. Buffer allocations are checked
-at load and during prefill. Expert-pool sizing reserves 1 GB for prefill;
-requests fail if their scratch cannot fit.
+at load and during prefill. Larger machines can use a larger explicit budget.
+Pool sizing reserves scratch for the configured chunk size and context.
+An explicit pool that leaves too little scratch capacity fails startup.
 
 The worker runs one prefill chunk or complete decode step at a time.
 Switching requests copies sequence state to and from CPU memory. Weights,
-expert slots, and scratch remain shared. One active request avoids these copies.
-Smaller prefill chunks reduce scheduling and cancellation latency at the cost
-of more overhead.
+expert slots, and scratch remain shared.
+
+`prefill_quantum` sets the maximum chunk size and its scratch reservation.
+Larger chunks reuse fetched experts across more tokens but leave less memory
+for the expert pool. The default of 128 preserves pool space on the 32 GB M4
+MacBook Air used for benchmarks. On a larger Mac, try
+`prefill_quantum = 4096` in `[limits]` and restart.
+
+A lone request uses up to `prefill_quantum` tokens per chunk. When another
+request is active or queued, chunks start at `min(128, prefill_quantum)`.
+The worker adjusts their size within that range to aim for
+`prefill_chunk_seconds` per chunk. Short tails, memory-limited chunks, and
+failed chunks do not affect this adjustment. Setting
+`prefill_chunk_seconds = 0` disables pacing. Actual chunks may be smaller
+to fit available memory or prompt boundaries. `cherenkov status --json`
+reports the pacing target in tokens as `prefill_chunk_tokens`.
+
+The duration is a target, not a deadline. Cancellation and newly arrived
+requests wait for the current chunk to finish.
+
+To compare chunk sizes, run the same prompt at 128 and 4096, restarting
+between runs. Keep the pool setting unchanged if it fits both reservations.
+Collect `cherenkov stats summary --json` before and after each request and
+subtract the cumulative counters to get its chunk count, tokens, time, and
+read bytes.
 
 Admission reserves checkpoint, sampling, token, and text storage for the
 requested context. Requests wait if they cannot fit together; one that cannot
@@ -98,6 +122,10 @@ layout is attached per engine, even when both variants exist on disk.
 `build_missing_store=true` permits startup conversion. Set it to false to
 require a valid existing store. Precision never changes automatically on
 memory or IO failure. An infeasible explicit pool fails startup.
+
+Adaptive sizing uses the device's recommended working set minus host and
+fixed allocations. It leaves the larger of 6 GB or the scratch allowance
+outside the pool, and respects the configured memory budget.
 
 `cut_weak` is off by default. A nonzero value permits skipping late weak
 experts and makes output depend on IO timing.

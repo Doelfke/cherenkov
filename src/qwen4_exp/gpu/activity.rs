@@ -37,6 +37,7 @@ impl ExpertCounters {
 
 #[derive(Debug, Default, Clone)]
 pub struct ExpertActivity {
+    pub prefill: prefill::PrefillStats,
     pub layer_prefixes: Vec<String>,
     pub experts_per_layer: usize,
     pub records: Vec<ExpertCounters>,
@@ -66,6 +67,7 @@ impl ExpertActivity {
 
     pub(super) fn new(layout: &crate::qwen4_exp::ExpertLayout) -> Self {
         Self {
+            prefill: Default::default(),
             layers: vec![LayerStats::default(); layout.layers],
             elapsed_seconds: 0.0,
             gpu_timestamps_available: false,
@@ -149,6 +151,7 @@ impl Gpu<'_> {
         snapshot.records.clone_from(&self.activity.records);
         snapshot.layers.clone_from(&self.activity.layers);
 
+        snapshot.prefill = self.activity.prefill;
         snapshot.experts_per_layer = self.activity.experts_per_layer;
         snapshot.elapsed_seconds = self.activity_started.elapsed().as_secs_f64();
         snapshot.gpu_timestamps_available = self.phase_timer.is_some();

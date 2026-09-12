@@ -63,6 +63,8 @@ pub struct Limits {
     pub active_requests: usize,
     pub active_state_mib: usize,
     pub prefill_quantum: usize,
+    /// Target chunk duration when requests compete; 0 disables pacing.
+    pub prefill_chunk_seconds: f64,
     pub max_sessions: usize,
     pub session_history_mib: usize,
     pub session_idle_seconds: u64,
@@ -84,6 +86,7 @@ impl Default for Limits {
             active_requests: 2,
             active_state_mib: 1024,
             prefill_quantum: 128,
+            prefill_chunk_seconds: 2.0,
             max_sessions: 16,
             session_history_mib: 16,
             session_idle_seconds: 900,
@@ -172,8 +175,10 @@ impl Config {
         let l = &self.limits;
 
         ensure!(
-            l.memory_gb.is_finite() && l.memory_gb > 0.0 && l.memory_gb <= 25.0,
-            "limits.memory_gb must be positive and at most 25 decimal GB"
+            l.memory_gb.is_finite()
+                && l.memory_gb > 0.0
+                && l.memory_gb * (BYTES_PER_GB as f64) < usize::MAX as f64,
+            "limits.memory_gb must be positive and representable in bytes"
         );
         ensure!(
             l.context_tokens <= 262144,
@@ -249,8 +254,12 @@ impl Config {
             "active_state_mib must be 1..8192"
         );
         ensure!(
-            (1..=1024).contains(&l.prefill_quantum),
-            "prefill_quantum must be 1..1024"
+            (1..=crate::qwen4_exp::gpu::prefill::MAX_PREFILL_ROWS).contains(&l.prefill_quantum),
+            "prefill_quantum must be 1..4096"
+        );
+        ensure!(
+            l.prefill_chunk_seconds.is_finite() && (0.0..=60.0).contains(&l.prefill_chunk_seconds),
+            "prefill_chunk_seconds must be 0..60"
         );
         ensure!(l.max_sessions <= 1024, "max_sessions must be 0..1024");
         ensure!(

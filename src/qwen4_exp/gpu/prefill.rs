@@ -15,15 +15,16 @@
 //! it, so decode continues from the result.
 
 use super::*;
-use crate::units::BYTES_PER_KIB;
 
-mod allocation;
+pub(super) mod allocation;
 mod attention;
 mod deltanet;
 mod experts;
 mod hyperconnection;
 mod ple;
 mod projection;
+mod stats;
+pub use stats::PrefillStats;
 
 /// Slots of the expert stream ring, and experts per fetch batch.
 pub(super) const RING: usize = 64;
@@ -60,60 +61,59 @@ struct MoeRef {
     gate: T,
 }
 
-pub(super) struct PrefillScratch {
+pub(super) struct PrefillScratch<T = Buf> {
+    allocated_bytes: usize,
     rows: usize,
-    ids: Buf,
-    e: Buf,
-    hyper: Buf,
-    normed: Buf,
-    d: Buf,
-    u: Buf,
-    mixed: Buf,
-    inj: Buf,
-    mix_out: Buf,
-    moe_out: Buf,
-    qg: Buf,
-    k: Buf,
-    v: Buf,
-    attn_out: Buf,
-    iqk: Buf,
-    iq: Buf,
-    bscore: Buf,
-    vis: Buf,
-    nvis: Buf,
-    vmask: Buf,
-    ag_qh: Buf,
-    ag_kh: Buf,
-    ag_vt: Buf,
-    ag_s: Buf,
-    ag_p: Buf,
-    ag_o: Buf,
-    qkv: Buf,
-    z: Buf,
-    a: Buf,
-    b: Buf,
-    kqn: Buf,
-    gbuf: Buf,
-    delta_y: Buf,
-    router: Buf,
-    topk_idx: Buf,
-    topk_w: Buf,
-    csr_rows: Buf,
-    csr_w: Buf,
-    xg: Buf,
-    ge: Buf,
-    ue: Buf,
-    hg: Buf,
-    ye: Buf,
-    mtp_hyper: Buf,
-    fe: Buf,
-    fh: Buf,
-    logits_all: Option<Buf>,
+    ids: T,
+    e: T,
+    hyper: T,
+    normed: T,
+    d: T,
+    u: T,
+    mixed: T,
+    inj: T,
+    mix_out: T,
+    moe_out: T,
+    qg: T,
+    k: T,
+    v: T,
+    attn_out: T,
+    iqk: T,
+    iq: T,
+    bscore: T,
+    vis: T,
+    nvis: T,
+    vmask: T,
+    ag_qh: T,
+    ag_kh: T,
+    ag_vt: T,
+    ag_s: T,
+    ag_p: T,
+    ag_o: T,
+    qkv: T,
+    z: T,
+    a: T,
+    b: T,
+    kqn: T,
+    gbuf: T,
+    delta_y: T,
+    router: T,
+    topk_idx: T,
+    topk_w: T,
+    csr_rows: T,
+    csr_w: T,
+    xg: T,
+    ge: T,
+    ue: T,
+    hg: T,
+    ye: T,
+    mtp_hyper: T,
+    fe: T,
+    fh: T,
+    logits_all: Option<T>,
 }
 
-/// Bytes of scratch per prefill row (the stream-wide buffers dominate),
-/// for sizing the chunk to the memory headroom.
-pub const ROW_BYTES: usize = 560 * BYTES_PER_KIB;
+pub const MAX_PREFILL_ROWS: usize = 4096;
 
 impl<'a> Gpu<'a> {
     /// One decoder block over t rows of `hyper`: everything up to the
@@ -455,6 +455,7 @@ impl<'a> Gpu<'a> {
         st.secs = t0.elapsed().as_secs_f64();
         st.ngram_s = self.ngram_gather_s.get() - ngram0;
 
+        self.activity.prefill.record(st);
         self.prefill_stats.push(st);
 
         self.pf = Some(pf);

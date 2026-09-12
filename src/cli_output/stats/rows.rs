@@ -287,3 +287,30 @@ fn plain_cell(value: &str) -> String {
         })
         .collect()
 }
+
+#[derive(Tabled)]
+pub(super) struct Prefill {
+    chunks: u64,
+    tokens: u64,
+    #[tabled(rename = "Smallest chunk (tokens)")]
+    min_chunk_tokens: usize,
+    #[tabled(rename = "Largest chunk (tokens)")]
+    max_chunk_tokens: usize,
+    #[tabled(rename = "Chunk time (s)", display = "decimal")]
+    seconds: f64,
+    #[tabled(rename = "Ring reuse wait (s)", display = "decimal")]
+    ring_wait_seconds: f64,
+}
+
+impl From<&gpu::prefill::PrefillStats> for Prefill {
+    fn from(value: &gpu::prefill::PrefillStats) -> Self {
+        Self {
+            chunks: value.chunks,
+            tokens: value.tokens,
+            min_chunk_tokens: value.min_chunk_tokens,
+            max_chunk_tokens: value.max_chunk_tokens,
+            seconds: value.seconds,
+            ring_wait_seconds: value.ring_wait_seconds,
+        }
+    }
+}

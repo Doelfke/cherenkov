@@ -23,6 +23,7 @@ pub(super) fn summary() -> Value {
     serde_json::to_value(wire::Snapshot {
         observation: observation(),
         data: wire::Summary {
+            prefill: Default::default(),
             reads: streaming.reads(),
             streaming,
             rates: wire::Rates {
@@ -146,4 +147,18 @@ fn layer_names_cannot_add_table_columns_or_terminal_escapes() {
 
     assert_eq!(row.matches('|').count(), 9);
     assert!(!markdown.contains('\u{1b}'));
+}
+
+#[test]
+fn prefill_chunks_have_a_text_view_and_accept_older_snapshots() {
+    let mut data = summary();
+    data["prefill"]["max_chunk_tokens"] = json!(1024);
+    let text = format_stats(&Command::StatsSummary, &data, false).unwrap();
+
+    assert!(text.contains("Prefill chunks"));
+    assert!(text.contains("Largest chunk (tokens)"));
+    assert!(text.contains("1024"));
+
+    data.as_object_mut().unwrap().remove("prefill");
+    assert!(format_stats(&Command::StatsSummary, &data, false).is_ok());
 }

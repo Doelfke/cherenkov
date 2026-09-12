@@ -39,6 +39,8 @@ pub struct Stats {
     pub http_address: Option<String>,
     pub cancelled_requests: u64,
     pub active_state_reserved_bytes: usize,
+    /// Contended prefill chunk size the worker is currently pacing toward.
+    pub prefill_chunk_tokens: usize,
     pub sessions: SessionStats,
     pub active: Vec<ActiveRequest>,
     #[serde(skip)]

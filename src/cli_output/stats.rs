@@ -74,6 +74,7 @@ fn summary_report(snapshot: &wire::Snapshot<wire::Summary>, mut report: Report) 
 
     report.fields("Observation", &Observation::from(&snapshot.observation));
     report.fields("Rates since engine load", &Rates::from(&summary.rates));
+    report.fields("Prefill chunks", &Prefill::from(&summary.prefill));
     report.fields("Expert reads", &Reads::from(&summary.reads));
     report.fields("CPU phases", &Cpu::from(&summary.streaming.phases));
     report.fields("GPU phases", &Gpu::from(&summary.streaming.phases));

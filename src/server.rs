@@ -21,6 +21,7 @@ use std::time::Duration;
 mod failure;
 mod http;
 mod output;
+mod pacer;
 mod registry;
 mod request;
 mod response;
@@ -87,6 +88,7 @@ pub fn serve(source: Source) -> Result<()> {
         &options,
         config.reserved_bytes(),
         Some(config.memory_bytes()),
+        config.limits.prefill_quantum,
     )?;
 
     ensure!(
