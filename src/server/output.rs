@@ -1,6 +1,9 @@
 //! Slow clients consume bounded writer queues, never the GPU worker thread.
 
-use super::{ApiKind, registry::Ticket, request::Request, response::Response, sessions::Commit};
+use super::{
+    ApiKind, registry::Ticket, request::Request, response::Response, sessions::Commit,
+    tool_call::WireToolCall,
+};
 use crate::control::State;
 use anyhow::{Result, bail};
 use serde_json::Value;
@@ -17,6 +20,7 @@ pub(super) enum Frame {
         reason: &'static str,
         usage: Value,
         turn: Option<Box<Commit>>,
+        tool_calls: Option<Vec<WireToolCall>>,
     },
     Error(String),
 }
@@ -101,6 +105,7 @@ fn write_frames(
                 reason,
                 usage,
                 turn,
+                tool_calls,
             } => {
                 // Cancellation must win before publication. Dropping an unpublished
                 // turn rolls it back before the final response is written.
@@ -110,7 +115,12 @@ fn write_frames(
                     turn.publish();
                 }
 
-                response.finish(&text, if completed { reason } else { "cancelled" }, usage)?;
+                response.finish(
+                    &text,
+                    tool_calls.as_deref(),
+                    if completed { reason } else { "cancelled" },
+                    usage,
+                )?;
 
                 return Ok(completed);
             }

@@ -13,7 +13,7 @@ fn session_input_keeps_history_and_settings_without_rewriting_json() {
     let first = message(&id, "Hello");
 
     begin_turn(&store, &first, "first")
-        .prepare("Hi", None, Default::default())
+        .prepare("Hi", None, Default::default(), None)
         .unwrap()
         .publish();
 
@@ -297,6 +297,115 @@ fn shared_chat_prefix_keeps_mtps_following_token_stable() {
         assert_eq!(
             prepared[0].ids[..end + following],
             prepared[1].ids[..end + following]
+        );
+    }
+}
+
+#[test]
+fn chat_tools_render_the_tools_block_and_build_a_contract() {
+    let body = json!({
+        "messages": [{"role": "user", "content": "Hi"}],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Look up weather.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}}
+                }
+            }
+        }],
+    });
+    let request = parse_request(&body, ApiKind::Chat, &Defaults::default(), None).unwrap();
+
+    let text = &request.prompt.text;
+
+    assert!(text.contains("# Tools"), "{text}");
+    assert!(text.contains("<tools>") && text.contains("</tools>"));
+    assert!(text.contains("\"name\":\"get_weather\""));
+    // The contract-facing shape normalizes the flag the model cannot guarantee.
+    assert!(text.contains("\"strict\":false"));
+    assert!(request.tool_contract.is_some());
+}
+
+#[test]
+fn chat_tool_choice_none_suppresses_the_tools_block() {
+    let body = json!({
+        "messages": [{"role": "user", "content": "Hi"}],
+        "tools": [{
+            "type": "function",
+            "function": {"name": "get_weather"}
+        }],
+        "tool_choice": "none",
+    });
+    let request = parse_request(&body, ApiKind::Chat, &Defaults::default(), None).unwrap();
+
+    assert!(!request.prompt.text.contains("# Tools"));
+    assert!(request.tool_contract.is_none());
+}
+
+#[test]
+fn chat_tools_reject_unsupported_controls() {
+    let fn_call = |name: &str| {
+        json!({
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"type": "function", "function": {"name": name}}],
+        })
+    };
+
+    // Bad name grammar, missing function object, wrong tool type, strict flag,
+    // and an explicit function choice are all rejected while tools are present.
+    for extra in [
+        json!({"tools": [{"type": "function", "function": {"name": "bad name"}}]}),
+        json!({"tools": [{"type": "function", "function": {}}]}),
+        json!({"tools": [{"type": "retrieval", "function": {"name": "get_weather"}}]}),
+        json!({"tools": [{"type": "function", "function": {"name": "x", "strict": true}}]}),
+        json!({"tool_choice": "required"}),
+        json!({"tool_choice": {"type": "function", "function": {"name": "x"}}}),
+        json!({"parallel_tool_calls": false}),
+    ] {
+        let mut body = fn_call("get_weather").as_object().unwrap().clone();
+
+        body.extend(extra.as_object().unwrap().clone());
+
+        let request = Value::Object(body);
+
+        assert!(
+            parse_request(&request, ApiKind::Chat, &Defaults::default(), None).is_err(),
+            "{request:?}"
+        );
+    }
+
+    // `tool_choice: "none"` is the one tool_choice that drops the tools block.
+    let mut body = fn_call("get_weather").as_object().unwrap().clone();
+
+    body.insert("tool_choice".to_owned(), json!("none"));
+
+    let request = parse_request(
+        &Value::Object(body),
+        ApiKind::Chat,
+        &Defaults::default(),
+        None,
+    )
+    .unwrap();
+
+    assert!(request.tool_contract.is_none());
+
+    // Legacy controls are still rejected.
+    for legacy in [
+        json!({"functions": [{"name": "x"}]}),
+        json!({"function_call": {"name": "x"}}),
+    ] {
+        let mut body = fn_call("get_weather").as_object().unwrap().clone();
+
+        body.extend(legacy.as_object().unwrap().clone());
+
+        let request = Value::Object(body);
+
+        assert!(
+            parse_request(&request, ApiKind::Chat, &Defaults::default(), None).is_err(),
+            "{request:?}"
         );
     }
 }

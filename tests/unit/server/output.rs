@@ -28,6 +28,7 @@ fn prepared_output(request: &str) -> PreparedOutput {
                 generated_tokens: 1,
                 ..Default::default()
             },
+            None,
         )
         .expect("prepared turn");
 
@@ -44,6 +45,7 @@ fn terminal(turn: Commit) -> Frame {
         text: "Hi".into(),
         reason: "length",
         usage: json!({"completion_tokens":1}),
+        tool_calls: None,
         turn: Some(Box::new(turn)),
     }
 }

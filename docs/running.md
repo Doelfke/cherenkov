@@ -46,13 +46,35 @@ Sampling or penalties disable MTP verification. CLI sampling uses the matching
 hyphenated flags, such as `--top-k` and `--presence-penalty`.
 
 Both `max_tokens` and `max_completion_tokens` are accepted. Stop strings,
-tools, JSON schemas, images, reasoning effort, template controls, and the
+JSON schemas, images, reasoning effort, template controls, and the
 Responses API are unsupported. Unsupported generation controls return an error.
 `--raw`, `--check`, and `--repeat` are CLI-only.
 
+### Tool calling
+
+Chat also accepts `tools` and `tool_choice`. Tools must be function
+definitions (`type` `function`, a name matching `[A-Za-z0-9_-]{1,64}`, and an
+object `parameters` schema); `strict: true` and non-object schemas are
+rejected. `tool_choice` accepts `auto` (default) and `none`; `required` and a
+specific-function choice are rejected because the checkpoint cannot be
+obligated to call a function. The checkpoint renders the tools block and
+emits calls as XML-style markup. The server parses that markup
+incrementally, holds back bytes that could belong to a terminal marker, and
+emits `tool_calls` with a `tool_calls` finish reason when calls are
+completed. When a tool call is produced, `content` is empty and the
+assistant message retains the structured calls for the next turn; `role`
+`tool` messages feed the tool response back into the conversation.
+A malformed tool-call region falls back to serving the model output
+verbatim as content. When a recovered call discards a truncated or
+suffixed tail or the parser keeps arguments that violate a declared
+parameter type, the server logs a one-line diagnostic. Retained sessions
+store the decoded argument objects; fresh requests send `arguments` as
+the JSON string. `parallel_tool_calls` is accepted only when it is
+`true` while tools are enabled or absent.
+
 ### Chat template
 
-Chat accepts text messages with system, developer, user, and assistant roles.
+Chat accepts text messages with system, developer, user, assistant, and tool roles.
 Developer messages are mapped to system messages. A system message must come
 first, and the conversation must contain a user query.
 

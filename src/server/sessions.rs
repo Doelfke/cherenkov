@@ -1,12 +1,14 @@
 //! Bounded conversation history, committed at the final-response publication boundary.
 
-use super::{UsageStats, failure::Failure, registry, request::SessionInput};
+use super::{
+    UsageStats, failure::Failure, registry, request::SessionInput, tool_call::WireToolCall,
+};
 use crate::units::BYTES_PER_MIB;
 use crate::{config::Config, sampling::Sampling};
 use anyhow::{Context, Result, ensure};
 use rand::rngs::StdRng;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -284,10 +286,38 @@ impl Turn {
         text: &str,
         rng: Option<StdRng>,
         usage: UsageStats,
+        tool_calls: Option<&[WireToolCall]>,
     ) -> Result<Commit> {
-        self.input
-            .messages
-            .push(json!({"role":"assistant", "content":text}));
+        let mut message = json!({"role":"assistant", "content":text});
+
+        if let Some(calls) = tool_calls.filter(|calls| !calls.is_empty()) {
+            // The template iterates `tool_call.arguments|items`, so retained
+            // history keeps the decoded object; the wire carries a string.
+            if text.is_empty() {
+                message["content"] = Value::Null;
+            }
+
+            message["tool_calls"] = Value::Array(
+                calls
+                    .iter()
+                    .map(|call| {
+                        json!({
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": serde_json::from_str::<Value>(
+                                    &call.arguments,
+                                )
+                                .unwrap_or_else(|_| Value::Object(Map::new())),
+                            },
+                        })
+                    })
+                    .collect::<Vec<Value>>(),
+            );
+        }
+
+        self.input.messages.push(message);
 
         let history = serde_json::to_string(&self.input.messages)?.into_boxed_str();
         let mut store = self.store.lock().unwrap();

@@ -88,6 +88,10 @@ request limit reduces admission and checkpoint reservations, not GPU buffers.
 
 ## Limits and tests
 
+Tool calling uses the checkpoint template and XML-style output parser. The
+client executes the returned calls; sessions retain them for later turns.
+See [tool calling](running.md#tool-calling) for supported request controls.
+
 Effort controls, the Responses API, sampled MTP, and cross-request GPU batching
 are unsupported. Chat uses the checkpoint template with thinking disabled.
 

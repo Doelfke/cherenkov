@@ -28,6 +28,7 @@ mod response;
 mod routes;
 mod sessions;
 mod stats;
+mod tool_call;
 mod worker;
 
 pub use stats::UsageStats;

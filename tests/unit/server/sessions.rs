@@ -17,6 +17,7 @@ fn cancelled_turn_does_not_change_history_settings_or_rng() {
             "unfinished",
             Some(StdRng::seed_from_u64(99)),
             Default::default(),
+            None,
         )
         .unwrap();
 
@@ -34,7 +35,7 @@ fn completed_turn_retains_sampling_and_incremental_history() {
 
     assert_eq!(turn.input.sampling.temperature, 0.7);
     assert!(Turn::begin(&store, &body, "req-2", 4096).is_err());
-    turn.prepare("Hi", None, Default::default())
+    turn.prepare("Hi", None, Default::default(), None)
         .unwrap()
         .publish();
 
@@ -73,7 +74,7 @@ fn random_stream_continues_across_turns_and_greedy_does_not_reset_it() {
     let body = message(&id, "One");
     let turn = begin_turn(&store, &body, "one");
 
-    turn.prepare("First", Some(rng.clone()), Default::default())
+    turn.prepare("First", Some(rng.clone()), Default::default(), None)
         .unwrap()
         .publish();
 
@@ -82,7 +83,7 @@ fn random_stream_continues_across_turns_and_greedy_does_not_reset_it() {
     let turn = begin_turn(&store, &body, "two");
 
     assert_eq!(turn.rng, Some(rng.clone()));
-    turn.prepare("Second", None, Default::default())
+    turn.prepare("Second", None, Default::default(), None)
         .unwrap()
         .publish();
 
@@ -113,7 +114,7 @@ fn history_budget_failure_releases_the_pin_and_reservation() {
     let turn = begin_turn(&store, &body, "large");
 
     assert!(
-        turn.prepare(&"x".repeat(256), None, Default::default())
+        turn.prepare(&"x".repeat(256), None, Default::default(), None)
             .is_err()
     );
 

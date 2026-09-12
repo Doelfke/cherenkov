@@ -184,7 +184,6 @@ fn check_invalid_requests(address: &str, messages: &Value) -> Result<()> {
         json!({"messages":[]}),
         json!({"messages":messages,"temperature":-0.8}),
         json!({"messages":messages,"max_tokens":100000}),
-        json!({"messages":messages,"tools":[]}),
     ] {
         let response = request(address, "/v1/chat/completions", Some(&body))?;
 

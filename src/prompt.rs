@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result, ensure};
 use minijinja::{Environment, Error, ErrorKind};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::{io::ErrorKind as IoErrorKind, path::Path};
 
 pub(crate) struct Prompt {
@@ -57,13 +57,16 @@ impl ChatTemplate {
     }
 
     pub(crate) fn user(&self, content: &str) -> Result<Prompt> {
-        self.chat(&[json!({"role": "user", "content": content})])
+        self.chat(&[json!({"role": "user", "content": content})], None)
     }
 
-    pub(crate) fn chat(&self, messages: &[Value]) -> Result<Prompt> {
+    /// Render a chat conversation; `tools` are the shaped function definitions
+    /// for the template's tools system block (omitted when empty).
+    pub(crate) fn chat(&self, messages: &[Value], tools: Option<&[Value]>) -> Result<Prompt> {
         let mut messages = text_messages(messages)?;
-        let text = self.render(&messages, true)?;
-        let message_end = common_prefix(&text, &self.render(&messages, false)?);
+        let tools = tools.filter(|t| !t.is_empty());
+        let text = self.render(&messages, true, tools)?;
+        let message_end = common_prefix(&text, &self.render(&messages, false, tools)?);
         // Prefix-only renders can be invalid (the template requires a user query).
         // Keep the last user with empty content as a cache probe, and trust only
         // bytes that also occur at the beginning of the full rendered prompt.
@@ -74,7 +77,7 @@ impl ChatTemplate {
 
             messages[last_user]["content"] = json!("");
 
-            if let Ok(prefix) = self.render(&messages, false) {
+            if let Ok(prefix) = self.render(&messages, false, tools) {
                 stable_end = common_prefix(&text, &prefix);
             }
         }
@@ -85,14 +88,26 @@ impl ChatTemplate {
         })
     }
 
-    fn render(&self, messages: &[Value], add_generation_prompt: bool) -> Result<String> {
+    fn render(
+        &self,
+        messages: &[Value],
+        add_generation_prompt: bool,
+        tools: Option<&[Value]>,
+    ) -> Result<String> {
         // Preserve the engine's direct-answer default. Other formatting and
         // reasoning-history defaults come from the checkpoint's template.
-        self.render_context(&json!({
+        let mut context = json!({
             "messages": messages,
             "add_generation_prompt": add_generation_prompt,
             "enable_thinking": false,
-        }))
+        });
+
+        // The template renders a tools system block only for a non-empty list.
+        if let Some(tools) = tools {
+            context["tools"] = json!(tools.to_vec());
+        }
+
+        self.render_context(&context)
     }
 
     fn render_context(&self, context: &Value) -> Result<String> {
@@ -129,28 +144,36 @@ fn embedded_template(model_dir: &Path) -> Result<Option<String>> {
     }))
 }
 
+/// Names accepted on the wire; the tokenizer side uses a longer bound for
+/// model-emitted names.
+pub(crate) fn valid_function_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 fn text_messages(messages: &[Value]) -> Result<Vec<Value>> {
     ensure!(!messages.is_empty(), "messages must not be empty");
 
     let mut messages = messages.to_vec();
 
-    for message in &mut messages {
+    for (index, message) in messages.iter_mut().enumerate() {
         let role = message["role"]
             .as_str()
-            .context("message role must be a string")?;
+            .context("message role must be a string")?
+            .to_owned();
 
         ensure!(
-            ["system", "developer", "user", "assistant"].contains(&role),
+            ["system", "developer", "user", "assistant", "tool"].contains(&role.as_str()),
             "unsupported role {role}"
         );
-        ensure!(
-            message["content"].is_string(),
-            "message content must be text"
-        );
-        ensure!(
-            message["tool_calls"].is_null(),
-            "tool calls are not supported"
-        );
+
+        match role.as_str() {
+            "assistant" => validate_assistant_message(message, index)?,
+            "tool" => validate_tool_message(message, index)?,
+            _ => validate_plain_message(message)?,
+        }
 
         if role == "developer" {
             message["role"] = json!("system");
@@ -158,6 +181,181 @@ fn text_messages(messages: &[Value]) -> Result<Vec<Value>> {
     }
 
     Ok(messages)
+}
+
+fn validate_plain_message(message: &Value) -> Result<()> {
+    ensure!(
+        message["content"].is_string(),
+        "message content must be text"
+    );
+    ensure!(
+        message["tool_calls"].is_null() || message["tool_calls"] == json!([]),
+        "tool_calls are only valid on assistant messages"
+    );
+    ensure!(
+        message["function_call"].is_null(),
+        "function_call is only valid on assistant messages"
+    );
+    ensure!(
+        message["tool_call_id"].is_null(),
+        "tool_call_id is only valid on tool messages"
+    );
+    ensure_reasoning_content_absent(message)?;
+
+    Ok(())
+}
+
+fn validate_tool_message(message: &Value, index: usize) -> Result<()> {
+    ensure!(
+        message["content"].is_string(),
+        "tool message {index} content must be text"
+    );
+    ensure!(
+        message["tool_calls"].is_null() || message["tool_calls"] == json!([]),
+        "tool messages cannot contain tool_calls"
+    );
+    ensure!(
+        message["function_call"].is_null(),
+        "function_call is only valid on assistant messages"
+    );
+
+    if !message["tool_call_id"].is_null() {
+        message["tool_call_id"]
+            .as_str()
+            .context("tool_call_id must be a string")?;
+    }
+
+    ensure_reasoning_content_absent(message)?;
+
+    Ok(())
+}
+
+fn ensure_reasoning_content_absent(message: &Value) -> Result<()> {
+    if !message["reasoning_content"].is_null() {
+        let reasoning = message["reasoning_content"]
+            .as_str()
+            .context("reasoning_content must be a string")?;
+
+        ensure!(
+            reasoning.is_empty(),
+            "reasoning_content is only valid on assistant messages"
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_assistant_message(message: &mut Value, index: usize) -> Result<()> {
+    ensure!(
+        message["content"].is_string() || message["content"].is_null(),
+        "assistant message {index} content must be text or null"
+    );
+    ensure!(
+        message["tool_call_id"].is_null(),
+        "message {index} tool_call_id is only valid on tool messages"
+    );
+
+    if !message["reasoning_content"].is_null() {
+        message["reasoning_content"]
+            .as_str()
+            .context("assistant reasoning_content must be a string")?;
+    }
+
+    // Keep the wire order: a legacy function_call precedes tool_calls.
+    let mut calls: Vec<Value> = Vec::new();
+
+    if !message["function_call"].is_null() {
+        let legacy = message["function_call"]
+            .as_object()
+            .context("function_call must be an object")?;
+        let (name, arguments) = function_call_name_and_arguments(legacy)?;
+
+        calls.push(tool_call_value(String::new(), name, arguments));
+        message.as_object_mut().unwrap().remove("function_call");
+    }
+
+    if !message["tool_calls"].is_null() {
+        for call in message["tool_calls"]
+            .as_array()
+            .context("tool_calls must be an array")?
+        {
+            if !call.is_object() {
+                anyhow::bail!("message {index} tool_calls entries must be objects");
+            }
+
+            if !call["id"].is_string() {
+                anyhow::bail!("message {index} tool_calls entries must contain a string id");
+            }
+
+            ensure!(
+                call["type"] == json!("function"),
+                "only function tool_calls are supported"
+            );
+
+            let function = call["function"]
+                .as_object()
+                .context("tool_calls entries must contain a function object")?;
+            let (name, arguments) = function_call_name_and_arguments(function)?;
+
+            calls.push(tool_call_value(
+                call["id"].as_str().unwrap().to_owned(),
+                name,
+                arguments,
+            ));
+        }
+    }
+
+    if !calls.is_empty() {
+        message["tool_calls"] = Value::Array(calls);
+    }
+
+    Ok(())
+}
+
+/// Validate a function reference and decode its `arguments` into the object
+/// the checkpoint template iterates. Fresh requests carry the wire form
+/// (a JSON string); retained session history carries the decoded object.
+fn function_call_name_and_arguments(function: &Map<String, Value>) -> Result<(String, Value)> {
+    let name = function
+        .get("name")
+        .and_then(Value::as_str)
+        .context("function name must be a string")?;
+
+    ensure!(
+        valid_function_name(name),
+        "function name must match [A-Za-z0-9_-]{{1,64}}"
+    );
+
+    let arguments = function
+        .get("arguments")
+        .context("function arguments are required")?;
+
+    let decoded = match arguments {
+        Value::String(encoded) if encoded.trim().is_empty() => Value::Object(Map::new()),
+        Value::String(encoded) => {
+            serde_json::from_str(encoded).context("function arguments must be valid JSON")?
+        }
+        Value::Object(_) => arguments.clone(),
+        other => anyhow::bail!("function arguments must be a JSON string or object, not {other:?}"),
+    };
+
+    ensure!(
+        decoded.is_object(),
+        "function arguments must decode to a JSON object"
+    );
+
+    Ok((name.to_owned(), decoded))
+}
+
+fn tool_call_value(id: String, name: String, arguments: Value) -> Value {
+    json!({
+        "id": id,
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": arguments,
+        },
+    })
 }
 
 fn common_prefix(a: &str, b: &str) -> usize {
