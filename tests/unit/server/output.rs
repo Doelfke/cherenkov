@@ -21,7 +21,15 @@ fn prepared_output(request: &str) -> PreparedOutput {
     let ticket = registry.register(Some(request), 1).expect("test request");
     let body = message(&id, "Hello");
     let turn = begin_turn(&store, &body, &ticket.id)
-        .prepare("Hi", None, None)
+        .prepare(
+            "Hi",
+            None,
+            crate::server::UsageStats {
+                generated_tokens: 1,
+                ..Default::default()
+            },
+            None,
+        )
         .expect("prepared turn");
 
     PreparedOutput {
@@ -74,6 +82,11 @@ fn cancellation_before_final_frame_rolls_back_the_prepared_turn() {
         let session = store.lock().unwrap().show(&id).unwrap();
 
         assert_eq!(session["messages"].as_array().unwrap().len(), messages);
+        assert_eq!(
+            session["stats"]["usage"]["generated_tokens"],
+            u64::from(!cancelled)
+        );
+        assert_eq!(session["stats"]["committed_turns"], u64::from(!cancelled));
         assert!(session["active_request_id"].is_null());
 
         let output = String::from_utf8(bytes).unwrap();
@@ -109,6 +122,7 @@ fn a_full_output_queue_cancels_without_publishing_or_blocking() {
     let session = store.lock().unwrap().show(&id).unwrap();
 
     assert_eq!(session["messages"], json!([]));
+    assert_eq!(session["stats"]["usage"]["generated_tokens"], 0);
     assert!(session["active_request_id"].is_null());
 }
 
@@ -152,6 +166,10 @@ fn writer_failure_respects_the_publication_boundary() {
         );
         assert!(session["active_request_id"].is_null());
         ticket.cancel();
+        assert_eq!(
+            session["stats"]["usage"]["generated_tokens"],
+            u64::from(!streaming)
+        );
         assert_eq!(ticket.cancelled(), streaming);
     }
 }

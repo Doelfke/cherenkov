@@ -1,169 +1,149 @@
-# Server configuration and control
-
-The resident process owns one effective configuration. The same binary
-queries it through a Unix-domain socket:
+# Server configuration
 
 ```sh
 cherenkov serve /path/to/model --config cherenkov.example.toml
-cherenkov status
 cherenkov status --json
+cherenkov dash
+cherenkov stats summary
+cherenkov stats layers
+cherenkov stats experts 0 --offset 0 --limit 64
 cherenkov config show
 cherenkov config reload
 ```
 
-Use [the example TOML](../cherenkov.example.toml) as the schema reference.
-`server.model_dir` can replace the positional model directory. When both are
-omitted, the server uses the pinned managed model from [the data
-store](storage.md). Relative
-model/socket paths in the file are relative to the file's directory;
-relative CLI paths are relative to the starting working directory.
-Paths do not expand shell variables or `~` inside TOML.
+See [statistics](stats.md) for summaries, detailed JSON, and dashboard controls.
 
-Precedence is built-in defaults, then the selected TOML file, then explicitly
-supplied CLI flags. Without `--config`, the server reads the one standard
-`~/.config/cherenkov/cherenkov.toml` path if it exists (or under
-`XDG_CONFIG_HOME` when set to an absolute path). There is no directory search.
-`--root` relocates data, scratch and this default config file; `[server].root`
-can relocate server model lookup, and an explicit CLI root takes precedence.
-Unknown sections/keys and invalid combinations fail validation.
-`serve --print-config` prints resolved TOML without
-loading weights, building stores, or binding listeners. Explicit values that
-match built-in defaults still override the file. Use `--pool-gb adaptive`
-to reset a configured pool budget, or `--no-eos=false` to restore EOS stopping.
+[The example TOML](../cherenkov.example.toml) lists all settings.
+Precedence, from lowest to highest: built-in defaults, TOML, explicit CLI flags.
+Unknown keys and invalid combinations are errors.
+
+Without `--config`, the server reads the default file described in
+[storage](storage.md). `server.model_dir` replaces the positional model path;
+if both are omitted, the managed model is used. Relative TOML paths resolve
+from the config file's directory. Relative CLI paths resolve from the working
+directory. TOML paths do not expand `~` or shell variables.
+
+`serve --print-config` prints resolved settings without loading the model.
+Explicit CLI values override TOML even when equal to built-in defaults.
+Use `--pool-gb adaptive` or `--no-eos=false` to restore those defaults.
 
 ## Reload
 
-`config reload` rereads the original file and reapplies the original CLI
-overrides. It validates the complete candidate before publishing anything.
-Only `[defaults]` is reloadable: output length, EOS handling, streaming and
-usage-stream defaults, and `[defaults.sampling]`.
-Every HTTP request captures
-its configuration
-before reading its body; queued/active requests retain that generation.
-Request JSON can override sampling, output length, streaming and usage defaults,
-subject to the output and context limits. EOS policy remains server-owned.
+Only `[defaults]` and `[defaults.sampling]` are reloadable. Changes to
+`[server]`, `[limits]`, or `[experts]` require a restart and reject the whole
+reload. Reload rereads the startup file, reapplies startup CLI flags, and
+validates before replacing the configuration. It requires a startup config
+file. An unchanged reload keeps the same generation number.
 
-Changes to `[server]`, `[limits]` or `[experts]` reject the entire reload
-with a restart-required error. An unchanged reload does not increment
-the generation. Reload without a startup config file returns an error.
-`--repack` is a one-time startup action and is never repeated by reload.
+Requests capture defaults before their bodies are read. Queued and active
+requests keep that snapshot. Request fields can override generation defaults
+within server limits; EOS policy stays server-owned. Sessions retain their
+committed sampling settings across reloads. `--repack` runs only at startup.
 
-Retained sessions capture sampling defaults when created and retain their
-committed settings across reloads. New stateless requests use the latest
-captured configuration.
+## Memory and scheduling
 
-## Memory and expert policy
+| Setting in `[limits]` | Default | Purpose |
+| --- | --- | --- |
+| `memory_gb` | 25 | Decimal GB for GPU buffers and reserved cache/session memory |
+| `context_tokens` | 2048 | Shared GPU context capacity |
+| `prefix_cache_mib` | 512 | Prefix checkpoint budget; maximum 2048 MiB |
+| `cache_max_entries` | 16 | Prefix checkpoint count |
+| `cache_idle_seconds` | 900 | Prefix idle expiry; 0 disables expiry |
+| `active_requests` | 2 | Requests progressing in turn on the GPU |
+| `active_state_mib` | 1024 | Active checkpoints and request workspace |
+| `prefill_quantum` | 128 | Maximum prompt tokens per chunk; 1 to 4096 |
+| `prefill_chunk_seconds` | 2 | Target chunk duration when requests compete; 0 disables pacing |
+| `max_sessions` | 16 | Retained conversations; 0 disables retention |
+| `session_history_mib` | 16 | Retained history budget |
+| `session_idle_seconds` | 900 | Session idle expiry; 0 disables expiry |
+| `queued_requests` | 8 | Waiting requests |
+| `http_readers` | 32 | Concurrent request readers |
+| `request_bytes` | 4194304 | Request body and combined session input limit |
+| `response_bytes` | 4194304 | Generated text limit per request |
+| `max_output_tokens` | 262144 | Output ceiling, also limited by remaining context |
 
-`limits.memory_gb` bounds Metal allocation plus reserved prefix cache, active
-sequence workspace and session history,
-up to 25 decimal GB. It is not a whole-process physical-memory cap. HTTP
-bodies and queues have separate bounds; JSON decoding has additional CPU
-overhead. The remaining unified memory and OS file cache must still fit
-the machine. The engine applies its buffer allocation guard during load
-and subsequent scratch allocation, and reserves 1 GB of headroom when
-checking the expert pool against this cap. A prompt whose scratch still
-cannot fit fails rather than exceeding the allocation limit.
+`memory_gb` excludes general process overhead. Buffer allocations are checked
+at load and during prefill. Larger machines can use a larger explicit budget.
+Pool sizing reserves scratch for the configured chunk size and context.
+An explicit pool that leaves too little scratch capacity fails startup.
 
-`prefix_cache_mib` reserves up to 2048 MiB. The cache evicts least recently
-used checkpoints to meet its byte and entry limits. Hits refresh idle
-expiry; `cache_idle_seconds=0` disables time-based expiry. Expiry runs
-before lookup and once per second while the engine is idle. Busy GPU work
-can delay physical reclamation until a safe engine boundary. Oversized
-entries are skipped. This cache stores hybrid model state, not responses
-or persistent conversation history.
+The worker runs one prefill chunk or complete decode step at a time.
+Switching requests copies sequence state to and from CPU memory. Weights,
+expert slots, and scratch remain shared.
 
-`active_requests=2` permits round-robin progress, one GPU operation at a time.
-`prefill_quantum=128` caps each prompt chunk. Smaller chunks improve scheduling
-and cancellation responsiveness but can increase prefill overhead. Decode yields
-after a complete verification step. A single active request avoids checkpoint
-copies between steps; switching requests copies hybrid state to/from CPU
-vectors.
-The expert pool and execution scratch remain shared.
+`prefill_quantum` sets the maximum chunk size and its scratch reservation.
+Larger chunks reuse fetched experts across more tokens but leave less memory
+for the expert pool. The default of 128 preserves pool space on the 32 GB M4
+MacBook Air used for benchmarks. On a larger Mac, try
+`prefill_quantum = 4096` in `[limits]` and restart.
 
-`active_state_mib=1024` reserves active checkpoint storage, sampler workspace,
-token history and bounded text copies. Admission estimates the requested prompt
-plus output and speculative headroom, including vector growth. A request that
-cannot fit alone returns 503; requests that cannot fit together wait. This
-reservation is separate from prefix-cache snapshots. GPU context buffers are
-allocated for the server maximum; smaller `context_tokens` requests impose a
-logical cap and reduce checkpoint reservations, without resizing those buffers.
+A lone request uses up to `prefill_quantum` tokens per chunk. When another
+request is active or queued, chunks start at `min(128, prefill_quantum)`.
+The worker adjusts their size within that range to aim for
+`prefill_chunk_seconds` per chunk. Short tails, memory-limited chunks, and
+failed chunks do not affect this adjustment. Setting
+`prefill_chunk_seconds = 0` disables pacing. Actual chunks may be smaller
+to fit available memory or prompt boundaries. `cherenkov status --json`
+reports the pacing target in tokens as `prefill_chunk_tokens`.
 
-`max_sessions=16`, `session_history_mib=16` and `session_idle_seconds=900` bound
-retained conversations. Zero sessions disables retention; zero idle seconds
-disables expiry. History evicts least recently used idle sessions. Queued,
-active
-and publishing turns pin their sessions. Successful turns refresh retention;
-cancelled or failed turns leave prior history/settings/RNG intact. History plus
-new messages must also fit `request_bytes`. There is no disk spill.
+The duration is a target, not a deadline. Cancellation and newly arrived
+requests wait for the current chunk to finish.
 
-`response_bytes=4194304` caps each generated text. Each response writer has a
-16-frame queue; overflow or a failed write cancels its generation. Writer
-sockets
-have a 30-second write timeout. Registered request IDs remain bounded through
-final output, so stalled writers cannot create unlimited threads. Requests
-waiting
-in the queue can be cancelled without waiting for a GPU slot.
+To compare chunk sizes, run the same prompt at 128 and 4096, restarting
+between runs. Keep the pool setting unchanged if it fits both reservations.
+Collect `cherenkov stats summary --json` before and after each request and
+subtract the cumulative counters to get its chunk count, tokens, time, and
+read bytes.
 
-`resident_bits` selects 4, 3 or 2 bits. Omitted `miss_bits` follows it;
-4-bit residents may instead fetch misses at 3 or 2 bits. Both cached
-low-bit stores may exist on disk, but one low-bit layout is attached to
-the engine. The policy applies to routed experts in prefill and decode;
-dense and shared-expert weights retain their existing precision.
+Admission reserves checkpoint, sampling, token, and text storage for the
+requested context. Requests wait if they cannot fit together; one that cannot
+fit alone returns 503. A lower request context reduces this reservation but
+does not resize the GPU context buffers.
 
-There is no automatic precision reduction on memory or IO failure.
-`build_missing_store=false` requires an existing validated low-bit store;
-true allows construction at startup. `cut_weak` is a separate opt-in
-deadline policy that can skip late weak expert contributions and makes
-output depend on IO timing. An explicit infeasible pool fails startup.
+Prefix checkpoints and idle sessions use independent LRU eviction and expiry.
+Cache hits refresh expiry; successful turns refresh session retention. Queued,
+active, and publishing turns pin their sessions. Failed or cancelled turns
+preserve committed history and RNG state. Oversized prefix entries are skipped.
+Expiry runs before lookup and once per idle second; GPU work can delay release.
+Neither store spills to disk.
 
-Developer environment escape hatches remain available and can affect
-execution independently of TOML; unset them for normal serving. They are
-documented in [developer-options.md](developer-options.md).
+Each response writer has a 16-frame queue and a 30-second write timeout.
+Overflow or write failure cancels unfinished generation. Request IDs remain
+reserved through final output, bounding writer count. Queued requests can be
+cancelled before admission.
 
-## Control socket and authentication
+## Expert policy
 
-The default socket is `TMPDIR/cherenkov-UID/control.sock` (using Rust's
-system temporary directory). Server and CLI must use the same TMPDIR;
-pass `--socket /absolute/path/control.sock` to select an explicit instance.
-The parent directory must be owned by the server user and mode `0700`;
-the server creates that directory if absent. The socket is mode `0600`.
-Both server and client also check the peer's effective UID with
-`getpeereid`. Other processes running as the same user are trusted.
+`resident_bits` selects 4, 3, or 2. `miss_bits` follows it unless specified;
+mixed mode requires 4-bit residents. The policy applies to routed experts in
+prefill and decode. Dense and shared-expert precision is unchanged. One low-bit
+layout is attached per engine, even when both variants exist on disk.
 
-A held advisory lock prevents two servers from owning the same control
-path. After a crash, startup can remove a stale, owned socket while holding
-that lock. It refuses symlinks, non-socket replacements, unsafe directory
-permissions and live sockets. The small lock file remains for reuse.
-The parent of a newly created private directory must already exist.
+`build_missing_store=true` permits startup conversion. Set it to false to
+require a valid existing store. Precision never changes automatically on
+memory or IO failure. An infeasible explicit pool fails startup.
 
-Control is not exposed on the OpenAI HTTP listener. No bearer token or TLS
-configuration is needed for local control. The protocol is one newline-
-terminated JSON request/response per connection, limited to 64 KiB and a
-two-second input deadline. Operations are `status`, `config_show` and
-`config_reload`. The CLI checks errors and returns a nonzero exit status.
+Adaptive sizing uses the device's recommended working set minus host and
+fixed allocations. It leaves the larger of 6 GB or the scratch allowance
+outside the pool, and respects the configured memory budget.
 
-## Statistics
+`cut_weak` is off by default. A nonzero value permits skipping late weak
+experts and makes output depend on IO timing.
+[Developer overrides](developer-options.md) apply independently of TOML.
 
-`status --json` returns a bounded snapshot, including readiness during
-model load, active/queued/completed/cancelled/failed/rejected request counts,
-current phase/config generation/token count, cumulative generated/prompt/
-cached tokens, prefill/decode seconds, and cache entries/bytes/evictions.
-It includes active request/session IDs, per-request phase and token counts,
-active-state reservations, and session history bytes/count/evictions. The
-`current` field identifies the most recently dispatched request. Statistics
-store no prompts, response history or per-request metrics history.
+## Control socket
 
-Prefill seconds cover advancing prompt chunks and storing checkpoints; decode
-seconds cover verification steps and enqueuing text. State switches and network
-writer time are excluded. These are worker timings, not end-to-end latency.
-Generated tokens include partial failed
-responses. Completed requests finished successfully through the response
-writer; failed requests include validation and generation failures after
-queueing. Rejected counts cover reader, request-admission and session-capacity rejection.
+The default is `TMPDIR/cherenkov-UID/control.sock`. Server and CLI must use the
+same TMPDIR, or select an instance with `--socket /absolute/path/control.sock`.
+The server creates its private directory if needed; its parent must exist.
 
-Memory reports the most recent engine observation, with its uptime
-timestamp: Metal allocation, expert pool bytes, and resident expert count.
-Observations are published after load, prefill and each request, and while
-idle. They are not a transient peak measurement or process RSS. The
-control thread never touches live GPU buffers and remains queryable while
-generation runs. The `capabilities` object reports current feature limits.
+The directory must be owned by the server user with mode `0700`; the socket
+uses `0600`. Both peers check the effective UID with `getpeereid`. Processes
+running as that user are trusted. A held lock prevents duplicate owners and
+permits stale socket cleanup. Symlinks, unsafe permissions, and live sockets
+are rejected.
+
+Control is separate from HTTP. Each connection carries one newline-terminated
+JSON request and response, limited to 64 KiB with a two-second input deadline.
+Operations are `status`, `stats_summary`, `stats_layers`, `stats_experts`,
+`config_show`, and `config_reload`. CLI errors return a nonzero exit status.

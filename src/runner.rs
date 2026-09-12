@@ -268,17 +268,23 @@ fn prefill_prompt(
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(64);
+    let engine = !prepared && ids.len() >= pf_min;
+    let prefill_fit = if engine {
+        gpu.prefill_rows_fit(check || std::env::var_os("CHERENKOV_DUMP_ARGMAX").is_some())?
+    } else {
+        1
+    };
     let mut pf_chunk: usize = std::env::var("CHERENKOV_PREFILL_CHUNK")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| gpu.prefill_rows_fit())
+        .unwrap_or(prefill_fit)
+        .min(prefill_fit)
         .max(1);
 
     if check {
         pf_chunk = pf_chunk.min(1024);
     }
 
-    let engine = !prepared && ids.len() >= pf_min;
     // Debug: CHERENKOV_DUMP_ARGMAX=path writes "pos argmax maxlogit" for
     // every prompt row, to diff the two prefill paths position by position.
     let dump_argmax = std::env::var("CHERENKOV_DUMP_ARGMAX").ok();
@@ -401,7 +407,7 @@ pub(crate) fn qwen4_exp_gen_once(
         mean(&ngram_recent),
     );
     eprintln!(
-        "decode {} tokens in {:.2}s ({:.2} tok/s) | {} steps, mean step {:.1} ms (min {:.1}, max {:.1}) | gpu-active {:.1} ms | io wait {:.1} ms (set {:.1}, read {:.1}) | sync fetches/step {:.1} + lookahead {:.1} (warm {:.1}, cut {:.1}) | pool {}/{} | {:.2} GB Metal",
+        "decode {} tokens in {:.2}s ({:.2} tok/s) | {} steps, mean step {:.1} ms (min {:.1}, max {:.1}) | gpu-span {:.1} ms | io wait {:.1} ms (set {:.1}, read {:.1}) | sync fetches/step {:.1} + lookahead {:.1} (warm {:.1}, cut {:.1}) | pool {}/{} | {:.2} GB Metal",
         out.len(),
         decode,
         out.len() as f64 / decode.max(1e-9),
@@ -420,6 +426,10 @@ pub(crate) fn qwen4_exp_gen_once(
         gpu.pool_resident(),
         gpu.pool_slots(),
         gpu.allocated_gb()
+    );
+    eprintln!(
+        "memory_stats {}",
+        serde_json::to_string(&gpu.memory_stats())?
     );
     dump_decode(gpu, ids, &out, prefill_steps)?;
 

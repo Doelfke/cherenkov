@@ -13,7 +13,7 @@ fn session_input_keeps_history_and_settings_without_rewriting_json() {
     let first = message(&id, "Hello");
 
     begin_turn(&store, &first, "first")
-        .prepare("Hi", None, None)
+        .prepare("Hi", None, Default::default(), None)
         .unwrap()
         .publish();
 

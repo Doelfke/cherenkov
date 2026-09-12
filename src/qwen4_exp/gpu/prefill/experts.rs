@@ -1,5 +1,6 @@
 //! Prefill expert grouping and event-protected streaming ring.
 
+use super::super::activity::reads::ReadSource;
 use super::*;
 
 // Pool entries stay resident for decode; ring entries are reused
@@ -76,6 +77,10 @@ impl Gpu<'_> {
             }
 
             let rid = self.record_id(record_layer, e as u32);
+
+            self.activity
+                .lookup(rid, list.len(), self.res.is_member(rid));
+
             // Preserve a resident record's precision. New kept records
             // use the pool's default; transient misses use --miss-experts.
             let source = if keep.contains(&e) || self.res.is_member(rid) {
@@ -101,6 +106,10 @@ impl Gpu<'_> {
                 ExpertSource::Pool { .. } if self.res.kind(rid) == 0 => base_layout,
                 _ => miss_layout,
             };
+
+            let stats = &mut self.activity.layers[record_layer].quant[layout.kind() as usize];
+            stats.selected_experts += 1;
+            stats.selected_rows += list.len() as u64;
 
             jobs.push(ExpertJob {
                 layout,
@@ -358,10 +367,10 @@ impl Gpu<'_> {
                         &mut ring_low
                     };
 
-                    reads.push((
+                    reads.push(self.ring_read(
+                        record_layer,
+                        job,
                         ring_base + *slot as usize * stride,
-                        self.record_id(record_layer, job.expert as u32) * job.layout.stride,
-                        job.layout.stride,
                     ));
                 }
                 _ => {}
@@ -376,7 +385,9 @@ impl Gpu<'_> {
             .sum::<usize>();
 
         if !self.fake_experts {
-            let (plan, _) = self.res.plan_reads(&to_set);
+            let (mut plan, _) = self.res.plan_reads(&to_set);
+
+            self.record_read_plan(&mut plan, &to_set, ReadSource::Prefill);
 
             plan.run(&self.pool_file, &self.pool_file_nocache);
             residency::fetch_into_slots(&self.pool_file_nocache, &ring4);
@@ -391,5 +402,35 @@ impl Gpu<'_> {
         self.res.finish(&self.ctx, &to_set)?;
 
         Ok((fetched, fetched_bytes))
+    }
+
+    fn ring_read(
+        &mut self,
+        layer: usize,
+        job: &ExpertJob,
+        destination: usize,
+    ) -> residency::RecordRead {
+        let record = self.record_id(layer, job.expert as u32);
+        let mut read = residency::RecordRead {
+            destination,
+            file_offset: record * job.layout.stride,
+            bytes: job.layout.stride,
+            ticket: None,
+        };
+
+        if self.fake_experts {
+            return read;
+        }
+
+        self.activity.read(record, read.bytes);
+
+        read.ticket = Some(self.read_tracker.ticket(
+            layer,
+            job.layout.kind(),
+            ReadSource::Prefill,
+            read.bytes,
+        ));
+
+        read
     }
 }

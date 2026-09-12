@@ -90,6 +90,7 @@ impl Gpu<'_> {
         src_row: usize,
     ) -> Result<Vec<u32>> {
         let hh = self.p.cfg.hc_hidden();
+        let phase_clock = self.phase_clock();
         let mtp = self.mtp.as_ref().context("no MTP head")?;
 
         unsafe {
@@ -106,7 +107,7 @@ impl Gpu<'_> {
         let seq = self.event_base + 1;
         self.event_base += 4;
         let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
-        let mut enc = cb.computeCommandEncoder().context("encoder")?;
+        let mut enc = self.phase_encoder(&cb, None, 4 * self.layers.len())?;
         let (src, off) = if from_trunk {
             (&self.scratch.hyper, 0)
         } else {
@@ -165,6 +166,7 @@ impl Gpu<'_> {
             &mut turn_s,
         )?;
         cb.waitUntilCompleted();
+        self.collect_phases(&[(slot_row, record_layer)], phase_clock);
 
         Ok(self.read_u32(&self.scratch.ids, IDS_MTP_OUT + rows)[IDS_MTP_OUT..].to_vec())
     }

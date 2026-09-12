@@ -9,6 +9,8 @@ use cherenkov::{
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
+mod cli_output;
+
 #[derive(Parser)]
 #[command(
     name = "cherenkov",
@@ -47,6 +49,11 @@ struct Serve {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open a live dashboard for the resident server
+    Dash {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
     /// Serve OpenAI-compatible completions and local control commands
     Serve(Box<Serve>),
     /// Query the resident server
@@ -54,6 +61,16 @@ enum Command {
         #[arg(long)]
         socket: Option<PathBuf>,
         #[arg(long)]
+        json: bool,
+    },
+    /// Query per-layer or per-expert activity from the resident server
+    Stats {
+        #[command(subcommand)]
+        target: StatsTarget,
+        #[arg(long, global = true)]
+        socket: Option<PathBuf>,
+        /// Emit the full JSON response instead of the summary
+        #[arg(long, global = true)]
         json: bool,
     },
     /// Inspect or reload the resident server's configuration
@@ -98,6 +115,47 @@ enum ConfigAction {
     Reload,
 }
 
+#[derive(Args)]
+struct PageArgs {
+    /// First entry to return
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
+    /// Maximum entries per response (1-128)
+    #[arg(long, default_value_t = 64, value_parser = clap::value_parser!(u16).range(1..=128))]
+    limit: u16,
+}
+
+#[derive(Subcommand)]
+enum StatsTarget {
+    /// Show overall read rates and CPU/GPU phase totals
+    Summary,
+    /// Sum expert counters for each layer
+    Layers(PageArgs),
+    /// Show individual experts in a packed-table layer
+    Experts {
+        layer: usize,
+        #[command(flatten)]
+        page: PageArgs,
+    },
+}
+
+impl StatsTarget {
+    fn command(self) -> control::Command {
+        match self {
+            Self::Summary => control::Command::StatsSummary,
+            Self::Layers(page) => control::Command::StatsLayers {
+                offset: page.offset,
+                limit: usize::from(page.limit),
+            },
+            Self::Experts { layer, page } => control::Command::StatsExperts {
+                layer,
+                offset: page.offset,
+                limit: usize::from(page.limit),
+            },
+        }
+    }
+}
+
 impl Serve {
     fn source(mut self, root: Option<PathBuf>) -> Result<Source> {
         self.overrides.root = root.as_deref().map(config::absolute).transpose()?;
@@ -137,6 +195,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(Command::Dash { socket }) => {
+            cli_output::dash::run(socket.unwrap_or_else(config::default_socket))
+        }
         Some(Command::Serve(args)) => {
             let print = args.print_config;
             let source = args.source(cli.root)?;
@@ -179,6 +240,19 @@ fn main() -> Result<()> {
             }
 
             Ok(())
+        }
+        Some(Command::Stats {
+            target,
+            socket,
+            json,
+        }) => {
+            let command = target.command();
+            let result = control::query(
+                &socket.unwrap_or_else(config::default_socket),
+                command.clone(),
+            )?;
+
+            cli_output::print_stats(&command, &result, json)
         }
         Some(Command::Config { action, socket }) => {
             let command = match action {

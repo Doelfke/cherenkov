@@ -1,8 +1,7 @@
 # Developer environment reference
 
-These are escape hatches, not normal CLI options.
-Unset all of them for normal inference and reproducibility comparisons.
-Diagnostic stage skipping or fake reads produce invalid model outputs.
+Unset these overrides for normal inference. Fake reads and skipped stages
+produce invalid outputs.
 
 | Variable | Value / default | Purpose |
 | --- | --- | --- |
@@ -24,7 +23,6 @@ Diagnostic stage skipping or fake reads produce invalid model outputs.
 | `CHERENKOV_DUMP_STATES` | output path; off | Router states: JSON header plus binary records. |
 | `CHERENKOV_DUMP_TOKENS` | output path; off | JSON prompt and generated token IDs. |
 
-`CHERENKOV_MODEL_DIR` selects a packed model directory for the real-weight
-tests. The tests otherwise use the default managed model under the XDG
-data directory and skip their bodies when the packed model is absent. Other kernel
-and CPU unit tests do not require a checkpoint.
+`CHERENKOV_MODEL_DIR` selects the packed model for real-weight tests. Otherwise
+they use the managed model, or skip if it is absent. Other CPU and kernel
+tests need no checkpoint.

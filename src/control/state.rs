@@ -1,7 +1,6 @@
 //! Small, bounded snapshots shared with the control thread. No prompts or logits.
 
 use crate::config::{Config, Source};
-use crate::units::BYTES_PER_GB;
 use anyhow::{Result, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -40,8 +39,12 @@ pub struct Stats {
     pub http_address: Option<String>,
     pub cancelled_requests: u64,
     pub active_state_reserved_bytes: usize,
+    /// Contended prefill chunk size the worker is currently pacing toward.
+    pub prefill_chunk_tokens: usize,
     pub sessions: SessionStats,
     pub active: Vec<ActiveRequest>,
+    #[serde(skip)]
+    pub(crate) activity: crate::qwen4_exp::gpu::ExpertActivity,
 }
 
 #[derive(Default, Serialize)]
@@ -56,7 +59,9 @@ pub struct ActiveRequest {
     pub id: String,
     pub session_id: Option<String>,
     pub phase: &'static str,
-    pub generated_tokens: usize,
+    #[serde(flatten)]
+    pub usage: crate::server::UsageStats,
+    pub reserved_state_bytes: usize,
 }
 
 #[derive(Serialize)]
@@ -76,13 +81,47 @@ pub struct CacheStats {
 
 #[derive(Default, Serialize)]
 pub struct MemoryStats {
-    pub metal_allocated_bytes_observed: u64,
-    pub expert_pool_bytes: usize,
-    pub resident_experts: usize,
+    #[serde(flatten)]
+    pub resources: crate::qwen4_exp::gpu::MemoryStats,
     pub observed_at_uptime_seconds: f64,
 }
 
 impl State {
+    pub(super) fn summary(&self) -> Result<Value> {
+        self.activity_page(|activity| Ok(super::activity::summary(activity)))
+    }
+    pub(super) fn layers(&self, offset: usize, limit: usize) -> Result<Value> {
+        self.activity_page(|activity| super::activity::layers(activity, offset, limit))
+    }
+
+    pub(super) fn experts(&self, layer: usize, offset: usize, limit: usize) -> Result<Value> {
+        self.activity_page(|activity| super::activity::experts(activity, layer, offset, limit))
+    }
+
+    fn activity_page<T: Serialize>(
+        &self,
+        query: impl FnOnce(&crate::qwen4_exp::gpu::ExpertActivity) -> Result<T>,
+    ) -> Result<Value> {
+        let stats = self.stats.lock().unwrap();
+
+        ensure!(stats.ready, "model not ready: still loading");
+        stats.activity.validate_dimensions()?;
+
+        let snapshot = super::stats::Snapshot {
+            observation: super::stats::Observation {
+                observed_at_uptime_seconds: stats.memory.observed_at_uptime_seconds,
+                elapsed_seconds: stats.activity.elapsed_seconds,
+                gpu_timestamps_available: stats.activity.gpu_timestamps_available,
+                gpu_timing: stats.activity.gpu_timing.clone(),
+            },
+            data: query(&stats.activity)?,
+        };
+
+        drop(stats);
+
+        Ok(serde_json::to_value(snapshot)?)
+    }
+
     pub fn new(source: Source, config: Config) -> Self {
         Self {
             source,
@@ -173,21 +212,41 @@ impl State {
         &self,
         gpu: &crate::qwen4_exp::gpu::Gpu<'_>,
         cache: &crate::prefix_cache::PrefixCache,
+        spare: &mut crate::qwen4_exp::gpu::ExpertActivity,
     ) {
         let (entries, bytes, evictions) = cache.stats();
 
-        self.update(|s| {
-            s.cache = CacheStats {
+        gpu.copy_expert_activity(spare);
+
+        let memory = MemoryStats {
+            resources: gpu.memory_stats(),
+            observed_at_uptime_seconds: self.started.elapsed().as_secs_f64(),
+        };
+
+        self.publish_observation(
+            CacheStats {
                 entries,
                 bytes,
                 evictions,
-            };
-            s.memory = MemoryStats {
-                metal_allocated_bytes_observed: (gpu.allocated_gb() * BYTES_PER_GB as f64) as u64,
-                expert_pool_bytes: gpu.pool_bytes(),
-                resident_experts: gpu.pool_resident(),
-                observed_at_uptime_seconds: self.started.elapsed().as_secs_f64(),
-            };
+            },
+            memory,
+            spare,
+        );
+    }
+
+    /// Swap complete snapshots while holding the lock; retain the old allocation
+    /// as the worker's spare so the next observation can reuse it.
+    pub(crate) fn publish_observation(
+        &self,
+        cache: CacheStats,
+        memory: MemoryStats,
+        spare: &mut crate::qwen4_exp::gpu::ExpertActivity,
+    ) {
+        self.update(|s| {
+            s.cache = cache;
+            s.memory = memory;
+
+            std::mem::swap(&mut s.activity, spare);
         });
     }
 }

@@ -110,6 +110,22 @@ target/release/cherenkov status
 target/release/cherenkov --help
 ```
 
+### Statistics
+
+Query the running server from another terminal:
+
+```sh
+target/release/cherenkov dash
+target/release/cherenkov stats summary
+target/release/cherenkov stats layers
+target/release/cherenkov stats experts 7
+target/release/cherenkov stats layers --json
+```
+
+`stats` shows formatted summaries; `--json` returns all fields. In `dash`,
+select a row for details. Press Enter on a layer to inspect its experts,
+then Escape to return. See [statistics](docs/stats.md) for paging and controls.
+
 ## Options
 
 The default is **4-bit experts with two adaptive speculative drafts**.
@@ -191,6 +207,20 @@ See the [engine guide](docs/engine.md) for the address-table layout and
 synchronization. Direct file-backed expert residency is a separate developer
 option; the default uses the shared pool described above.
 The [documentation index](docs/README.md) maps the remaining guides and source.
+
+## Development
+
+Install the tools with `mise install`, then run:
+
+```sh
+mise run fix-spacing   # rustfmt and statement spacing
+mise run lint-spacing  # check both without changing files
+mise run lint-md       # check Markdown
+mise run fix-md        # fix Markdown formatting
+```
+
+PRs check Rust formatting and spacing on Ubuntu and run tests on macOS.
+See [validation](docs/validation.md) for tests, Clippy, Oxisym, and Metal checks.
 
 ## License
 

@@ -16,6 +16,7 @@
 //! parallel reads. No second tier, but no page-cache churn either, which
 //! matters when the machine is short of memory.
 
+use super::activity::reads::{ReadSource, ReadTicket, ReadTracker};
 use crate::metal::MetalContext;
 use crate::units::BYTES_PER_KIB;
 use anyhow::{Context, Result};
@@ -35,6 +36,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub struct Landed(Arc<AtomicBool>);
 
 impl Landed {
+    pub(super) fn new(done: bool) -> Self {
+        Self(Arc::new(AtomicBool::new(done)))
+    }
     pub fn done(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
@@ -64,13 +68,21 @@ pub enum Pool {
 /// One record read. A zero destination means a page-cache read for a
 /// mapped residency-set record; otherwise it is a CPU address in the copy
 /// pool. `need_index` connects completion to the caller's acquired records.
+#[derive(Clone)]
 struct PlannedRead {
-    destination: usize,
-    file_offset: usize,
-    bytes: usize,
+    transfer: RecordRead,
     /// 0 = base 4-bit store, 1 = 3-bit, 2 = 2-bit.
     kind: u8,
     need_index: usize,
+}
+
+/// A destination and its measurement ticket travel together through batching.
+#[derive(Clone)]
+pub(super) struct RecordRead {
+    pub destination: usize,
+    pub file_offset: usize,
+    pub bytes: usize,
+    pub ticket: Option<ReadTicket>,
 }
 
 /// Reads required between pool acquisition and residency completion.
@@ -78,11 +90,15 @@ struct PlannedRead {
 pub struct ReadPlan {
     items: Vec<PlannedRead>,
     low_file: Option<File>,
-    /// Base record size for reads through the page cache.
-    stride: usize,
 }
 
 impl ReadPlan {
+    pub(super) fn read_requests(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.items
+            .iter()
+            .map(|read| (read.need_index, read.transfer.bytes))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -99,126 +115,135 @@ impl ReadPlan {
     /// set). The caller keeps the flags of reads it stops waiting for and
     /// checks them before the slot can be reused.
     pub fn run_tracked(&self, cached: &File, nocache: &File, need_len: usize) -> Vec<Landed> {
-        let flags: Vec<Arc<AtomicBool>> = (0..need_len)
-            .map(|_| Arc::new(AtomicBool::new(true)))
-            .collect();
+        let flags: Vec<Landed> = (0..need_len).map(|_| Landed::new(true)).collect();
 
         for read in &self.items {
-            let (dst, off, len) = (read.destination, read.file_offset, read.bytes);
             let flag = flags[read.need_index].clone();
 
-            flag.store(false, Ordering::Release);
+            flag.0.store(false, Ordering::Release);
 
-            let stride = self.stride;
-            let cached = cached.try_clone().expect("dup fd");
-            let src = if read.kind != 0 {
-                self.low_file.as_ref().expect("low-bit store")
-            } else {
-                nocache
-            }
-            .try_clone()
-            .expect("dup fd");
+            let file = self
+                .file(read, cached, nocache)
+                .try_clone()
+                .expect("dup fd");
+            let read = read.clone();
 
             std::thread::spawn(move || {
-                if dst != 0 {
-                    fetch_into_slots(&src, &[(dst, off, len)]);
-                } else {
-                    read_through_cache(&cached, stride, &[off]);
-                }
-
-                flag.store(true, Ordering::Release);
+                read.transfer.run(&file);
+                flag.0.store(true, Ordering::Release);
             });
         }
 
-        flags.into_iter().map(Landed).collect()
+        flags
     }
 
     pub fn run(&self, cached: &File, nocache: &File) {
-        let pulls: Vec<usize> = self
-            .items
-            .iter()
-            .filter(|read| read.destination == 0)
-            .map(|read| read.file_offset)
-            .collect();
-        let copies4: Vec<(usize, usize, usize)> = self
-            .items
-            .iter()
-            .filter(|read| read.destination != 0 && read.kind == 0)
-            .map(|read| (read.destination, read.file_offset, read.bytes))
-            .collect();
-        let low_copies: Vec<(usize, usize, usize)> = self
-            .items
-            .iter()
-            .filter(|read| read.destination != 0 && read.kind != 0)
-            .map(|read| (read.destination, read.file_offset, read.bytes))
-            .collect();
-
         std::thread::scope(|s| {
-            if !pulls.is_empty() {
-                s.spawn(move || read_through_cache(cached, self.stride, &pulls));
-            }
+            for read in &self.items {
+                let file = self.file(read, cached, nocache);
 
-            if !copies4.is_empty() {
-                s.spawn(move || fetch_into_slots(nocache, &copies4));
-            }
-
-            if !low_copies.is_empty() {
-                let low_file = self.low_file.as_ref().expect("low-bit store");
-
-                s.spawn(move || fetch_into_slots(low_file, &low_copies));
+                s.spawn(move || read.transfer.run(file));
             }
         });
+    }
+
+    fn file<'a>(&'a self, read: &PlannedRead, cached: &'a File, nocache: &'a File) -> &'a File {
+        if read.transfer.destination == 0 {
+            return cached;
+        }
+
+        if read.kind == 0 {
+            return nocache;
+        }
+
+        self.low_file.as_ref().expect("low-bit store")
+    }
+
+    pub(super) fn observe(&mut self, tracker: &ReadTracker, layer: usize, source: ReadSource) {
+        for read in &mut self.items {
+            read.transfer.ticket =
+                Some(tracker.ticket(layer, read.kind, source, read.transfer.bytes));
+        }
+    }
+
+    pub(super) fn tickets(&self, need: &[usize]) -> Vec<(usize, ReadTicket)> {
+        self.items
+            .iter()
+            .filter_map(|read| {
+                read.transfer
+                    .ticket
+                    .as_ref()
+                    .map(|ticket| (need[read.need_index], ticket.clone()))
+            })
+            .collect()
+    }
+}
+
+impl RecordRead {
+    fn run(&self, file: &File) {
+        let read = || read_record(file, self.destination, self.file_offset, self.bytes);
+
+        if let Some(ticket) = &self.ticket {
+            ticket.measure(read);
+
+            return;
+        }
+
+        read();
     }
 }
 
 /// Fill independent slots in parallel, one complete record per read.
-/// Splitting reads did not improve measured latency.
-pub fn fetch_into_slots(file: &File, fetch: &[(usize, usize, usize)]) {
-    use std::os::unix::fs::FileExt as _;
-
+pub(super) fn fetch_into_slots(file: &File, reads: &[RecordRead]) {
     std::thread::scope(|s| {
-        for &(dst, off, len) in fetch {
-            s.spawn(move || {
-                // Each slot has one writer and is not yet visible to the GPU.
-                let buf = unsafe { std::slice::from_raw_parts_mut(dst as *mut u8, len) };
-                let mut done = 0;
-
-                while done < buf.len() {
-                    match file.read_at(&mut buf[done..], (off + done) as u64) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => done += n,
-                    }
-                }
-            });
+        for read in reads {
+            s.spawn(move || read.run(file));
         }
     });
 }
 
-/// Pull records' pages into memory through the page cache (parallel
-/// reads into per-thread scratch; the mapping's pages are what the
-/// residency set will pin).
-fn read_through_cache(file: &File, stride: usize, offsets: &[usize]) {
-    use std::os::unix::fs::FileExt as _;
-
+/// A zero destination faults mapped pages in through bounded scratch.
+fn read_record(file: &File, destination: usize, offset: usize, bytes: usize) -> usize {
     const PIECE: usize = 256 * BYTES_PER_KIB;
 
-    std::thread::scope(|s| {
-        for &off in offsets {
-            s.spawn(move || {
-                let mut scratch = vec![0u8; PIECE];
-                let mut done = 0usize;
+    if destination != 0 {
+        // The record's slot has one writer and is not yet visible to the GPU.
+        let buffer = unsafe { std::slice::from_raw_parts_mut(destination as *mut u8, bytes) };
 
-                while done < stride {
-                    let n = PIECE.min(stride - done);
+        return read_at(file, buffer, offset);
+    }
 
-                    match file.read_at(&mut scratch[..n], (off + done) as u64) {
-                        Ok(0) | Err(_) => break,
-                        Ok(k) => done += k,
-                    }
-                }
-            });
+    let mut scratch = vec![0; PIECE.min(bytes)];
+    let mut done = 0;
+
+    while done < bytes {
+        let count = scratch.len().min(bytes - done);
+        let read = read_at(file, &mut scratch[..count], offset + done);
+        done += read;
+
+        if read != count {
+            break;
         }
-    });
+    }
+
+    done
+}
+
+fn read_at(file: &File, buffer: &mut [u8], offset: usize) -> usize {
+    use std::os::unix::fs::FileExt;
+
+    let mut done = 0;
+
+    while done < buffer.len() {
+        match file.read_at(&mut buffer[done..], (offset + done) as u64) {
+            Ok(0) => break,
+            Ok(bytes) => done += bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+
+    done
 }
 
 impl Pool {
@@ -334,9 +359,12 @@ impl Pool {
                 for (need_index, &rid) in need.iter().enumerate() {
                     if !r.cached(rid) {
                         items.push(PlannedRead {
-                            destination: 0,
-                            file_offset: rid * r.stride,
-                            bytes: r.stride,
+                            transfer: RecordRead {
+                                ticket: None,
+                                destination: 0,
+                                file_offset: rid * r.stride,
+                                bytes: r.stride,
+                            },
                             kind: 0,
                             need_index,
                         });
@@ -349,7 +377,6 @@ impl Pool {
                     ReadPlan {
                         items,
                         low_file: None,
-                        stride: r.stride,
                     },
                     warm,
                 )
@@ -368,9 +395,12 @@ impl Pool {
                         };
 
                         PlannedRead {
-                            destination: c.base + slot * c.slot_stride,
-                            file_offset: off,
-                            bytes: len,
+                            transfer: RecordRead {
+                                ticket: None,
+                                destination: c.base + slot * c.slot_stride,
+                                file_offset: off,
+                                bytes: len,
+                            },
                             kind,
                             need_index,
                         }
@@ -382,14 +412,7 @@ impl Pool {
                     None
                 };
 
-                (
-                    ReadPlan {
-                        items,
-                        low_file,
-                        stride: c.stride,
-                    },
-                    0,
-                )
+                (ReadPlan { items, low_file }, 0)
             }
         }
     }
@@ -738,3 +761,7 @@ impl Residency {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/qwen4_exp/gpu/read_io.rs"]
+mod tests;

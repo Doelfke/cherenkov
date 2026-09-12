@@ -1,10 +1,10 @@
 # Validation
 
-Run correctness checks without concurrent inference or benchmarks:
+Run checks without concurrent inference or benchmarks:
 
 ```sh
 mise install
-mise run fmt-check
+mise run lint-spacing
 mise run lint-md
 CHERENKOV_MODEL_DIR=/path/to/packed/model mise run test
 mise run check-metal
@@ -12,48 +12,46 @@ mise run clippy
 mise run oxisym
 ```
 
-`mise.toml` pins Rust, rustfmt, Clippy, styling-lint, Node and markdownlint-cli2.
-Oxisym additionally requires `cargo-dylint` and `dylint-link` and selects its own
-nightly toolchain. `mise run fmt` formats Rust; `mise run fix-md` fixes
-Markdown. Markdown checks cover every `.md` file outside build directories.
+`mise.toml` pins the tools. Oxisym selects its own nightly toolchain and
+requires two additional tools:
 
-`mise run lint-spacing` checks statement spacing across Rust source and tests.
-`mise run fix-spacing` runs rustfmt, then adds the missing blank lines.
-[styling-lint](https://github.com/visionsofparadise/styling-lint) keeps consecutive
-assignments and calls together and separates other statement groups. These are
-syntax rules, so review the diff for places where related steps belong together.
+```sh
+cargo install --locked cargo-dylint dylint-link
+```
+
+| Command | Purpose |
+| --- | --- |
+| `mise run fmt` | Format Rust |
+| `mise run fix-spacing` | Format Rust and separate statement groups |
+| `mise run fix-md` | Apply Markdown lint fixes |
+| `mise run clangd` | Regenerate Metal editor configuration |
+
+Review automatic spacing changes: the rules group syntax, not meaning.
 
 ## Tests
 
-Engine unit tests live in `tests/unit/`, mirroring their source modules.
-They are compiled as child modules so they can test private implementation
-details. Rust task-runner tests live in `xtask/tests/`.
+Engine unit tests are child modules in `tests/unit/`, mirroring the source.
+Automation tests are in `xtask/tests/`.
 
-Prompt tests compare the unmodified checkpoint template against 20 independently
-generated Transformers/Jinja2 reference contexts. Rendered bytes and template
-errors are checked without a model. With `CHERENKOV_MODEL_DIR`, token IDs are
-also checked using the checkpoint tokenizer and verified input hashes. These
-tests need no Python runtime; [fixture provenance](../tests/fixtures/prompt/README.md)
-records the reference versions and regeneration procedure.
+Pull requests check Rust formatting and statement spacing on Ubuntu and
+run the test suite on macOS 15 and 26. The macOS jobs include synthetic Metal
+tests; real-weight checks need a local model.
 
-CPU tests cover configuration, CLI validation, packing, quantization, context
-budgets, prefix matching, storage paths and HTTP request handling. Sampling
-checks cover distributions, seeds, pending-token suspension, RNG continuation,
-cancellation/publication ordering, session pinning, eviction and memory failure.
-Packing
-fixtures exercise individual and combined targets, cache reuse, custom output
-directories and failed-build manifest invalidation.
+| Area | Coverage |
+| --- | --- |
+| CPU | Config, CLI, packing, quantization, paths, and context limits |
+| Server | HTTP, sampling, RNG continuation, cancellation, eviction, and memory admission |
+| Metal | Attention, argmax, experts, prefill, and complete state restoration |
+| Automation | Timing, SVGs, cycle detection, resume, cleanup, and reports |
 
-GPU tests require Apple Silicon and Metal. Real-weight tests also require
-`CHERENKOV_MODEL_DIR`, or a model in the default managed location. They skip
-when the model is absent; low-bit checks also skip missing Q2/Q3 stores.
-They verify attention, argmax, expert projections, prefill and complete
-hybrid-state checkpoint restoration against CPU or independent references.
-`check-metal` compiles the same assembled shader libraries as the engine and
-fails when `kernels/.clangd` is stale; `mise run clangd` regenerates it.
+Metal tests require Apple Silicon. Real-weight tests use `CHERENKOV_MODEL_DIR`
+or the managed model and skip when it is absent. Low-bit checks skip absent
+Q2/Q3 stores. `check-metal` compiles the engine's assembled libraries and
+rejects stale `kernels/.clangd`.
 
-Task-runner tests cover timing separation, SVG validation, cycle detection,
-resume rules, process cleanup, report generation and README updates.
+Prompt tests compare 20 independent template references. Text and error checks
+need no model. Token checks need the matching tokenizer, but no weights or GPU.
+See [fixture provenance](../tests/fixtures/prompt/README.md).
 
 ## Live checks
 
@@ -64,44 +62,33 @@ cargo xtask smoke sessions --model /path/to/model
 cargo xtask smoke download
 ```
 
-Server checks cover JSON/SSE completions, usage, prefix reuse and errors.
-Control checks cover configuration reloads, limits and cache expiry. Each
-starts and stops its own server. Session checks exercise concurrent progress,
-queued/prefill/decode cancellation, rollback and continued turns. They also
-cover four mixed greedy/sampled sessions, disconnects, memory admission,
-request-capacity rejection and ID reuse, and recovery after response-limit
-failures. Unit tests exercise full writer queues and cancellation/publication
-races without timing-sensitive sockets. The download
-check fetches only metadata
-and verifies cache reuse. Reports go to ignored `results/*-smoke.json`.
+Each server check starts and stops its own process. Checks cover JSON/SSE,
+prefix reuse, reloads, concurrent sessions, cancellation, rollback, limits,
+and recovery. The download check fetches metadata only and checks reuse.
+Reports go to ignored `results/*-smoke.json` files.
 
-## Readability checks
+## Lint limits
 
-Clippy checks cognitive complexity at 12, nesting at 2, and unnecessary
-`else` branches. Prefer guard clauses and helpers at meaningful operation
-boundaries. Keep numerical iteration order and GPU dispatch order explicit;
-do not split them merely to meet a line count.
+Clippy uses cognitive complexity 12 and nesting 2, and checks unnecessary
+`else` branches. Use guard clauses and helpers without obscuring numerical
+or dispatch order.
 
-The complexity limit passes. The experimental nesting limit still flags
-existing code, including simple guards inside methods. To check other lints:
+Complexity passes. The experimental nesting limit still flags existing code.
+To run the other lints independently:
 
 ```sh
 cargo clippy --workspace --all-targets --offline -- -D warnings -A clippy::excessive_nesting
 ```
 
-Oxisym currently reports eight existing structural-similarity findings.
+Oxisym reports existing structural-similarity findings for manual review.
 
-## Performance and known limitations
+## Known gaps
 
-Use the [benchmark suite](../benchmarks/README.md) for full answers, phase
-timings and pelicans. [Saved results](../results/README.md) identify their
-measured revisions; correctness tests do not establish current throughput.
+Use the [benchmark suite](../benchmarks/README.md) for performance checks.
+Saved results apply to their recorded revisions.
 
-The CPU `--check` oracle is deliberately slow. Fresh and cached runs can
-produce different close argmax decisions because expert accumulation order
-changes. Byte-exact state restoration does not imply identical generated text.
-
-A prior local AC comparison found a possible 6.5% long-prompt decode
-regression after readability changes; it remains unresolved. Passing tests
-and the published baseline do not rule it out. Full model download throughput
-and a fresh full-size pack have not been validated.
+- A local AC comparison found a possible 6.5% long-prompt decode regression
+  after readability changes. It remains unresolved.
+- Full download throughput and a fresh full-size pack have not been validated.
+- Cached and fresh runs can differ on close argmax decisions as expert
+  accumulation order changes. Exact state restoration does not prevent this.

@@ -75,6 +75,8 @@ impl Manifest {
             manifest.version
         );
 
+        manifest.experts.validate_dimensions()?;
+
         Ok(manifest)
     }
 
@@ -87,3 +89,22 @@ impl Manifest {
 }
 
 pub const PAGE: u64 = 16384;
+
+impl ExpertLayout {
+    pub(crate) fn validate_dimensions(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.layers > 0 && self.experts > 0,
+            "expert layer dimensions must be nonzero"
+        );
+        anyhow::ensure!(
+            self.layer_prefixes.len() == self.layers,
+            "expert layer count does not match layer prefixes"
+        );
+        anyhow::ensure!(
+            self.layers.checked_mul(self.experts).is_some(),
+            "expert record count overflows"
+        );
+
+        Ok(())
+    }
+}

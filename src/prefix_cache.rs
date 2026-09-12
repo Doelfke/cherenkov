@@ -5,7 +5,7 @@ use crate::{
     qwen4_exp::gpu::{Gpu, MAX_NB, PrefixState},
     runner::PrefillResume,
 };
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -191,6 +191,13 @@ pub(crate) struct Prefill {
     pub seed: PrefillResume,
 }
 
+pub(crate) struct PrefillProgress {
+    pub done: bool,
+    /// Successful engine rows suitable for pacing; excludes boundary tails,
+    /// memory-limited chunks, and the small-row execution path.
+    pub pacing_tokens: Option<usize>,
+}
+
 impl Prefill {
     pub(crate) fn advance(
         &mut self,
@@ -199,9 +206,12 @@ impl Prefill {
         ids: &[u32],
         options: &Options,
         quantum: usize,
-    ) -> Result<bool> {
+    ) -> Result<PrefillProgress> {
         let Some(end) = self.boundaries.iter().copied().find(|&end| end > gpu.pos) else {
-            return Ok(true);
+            return Ok(PrefillProgress {
+                done: true,
+                pacing_tokens: None,
+            });
         };
         let pf_min = std::env::var("CHERENKOV_PREFILL_MIN")
             .ok()
@@ -210,11 +220,13 @@ impl Prefill {
         let remaining = end - gpu.pos;
         let engine = remaining >= pf_min;
         let capacity = if engine {
+            let fit = gpu.prefill_rows_fit(false)?;
+
             std::env::var("CHERENKOV_PREFILL_CHUNK")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or_else(|| gpu.prefill_rows_fit())
-                .min(gpu.prefill_rows_fit())
+                .unwrap_or(fit)
+                .min(fit)
         } else {
             std::env::var("CHERENKOV_ROWS_MAX")
                 .ok()
@@ -222,8 +234,7 @@ impl Prefill {
                 .unwrap_or(MAX_NB)
                 .clamp(1, MAX_NB)
         };
-        let size = capacity.min(quantum).max(1);
-        let n = remaining.div_ceil(remaining.div_ceil(size));
+        let n = chunk_len(remaining, capacity, quantum)?;
         let pos = gpu.pos;
         self.seed = prefill_rows(
             gpu,
@@ -239,8 +250,27 @@ impl Prefill {
 
         gpu.prefill_release();
 
-        Ok(gpu.pos == ids.len())
+        Ok(PrefillProgress {
+            done: gpu.pos == ids.len(),
+            pacing_tokens: pacing_sample(remaining, capacity, quantum, engine).then_some(n),
+        })
     }
+}
+
+fn pacing_sample(remaining: usize, capacity: usize, quantum: usize, engine: bool) -> bool {
+    engine && remaining >= quantum && capacity >= quantum
+}
+
+/// Balance a boundary's chunks without exceeding memory or scheduling limits.
+fn chunk_len(remaining: usize, capacity: usize, quantum: usize) -> Result<usize> {
+    let size = capacity.min(quantum);
+
+    ensure!(
+        remaining > 0 && size > 0,
+        "prefill chunk requires tokens and capacity"
+    );
+
+    Ok(remaining.div_ceil(remaining.div_ceil(size)))
 }
 
 /// Advance one prompt chunk and retain the predictions needed to resume decode.
