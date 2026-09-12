@@ -6,7 +6,10 @@ use xtask::authors;
 fn author_entries_match_complete_logins_and_require_name_and_email() -> Result<()> {
     let file = tempfile::NamedTempFile::new()?;
     let cases = [
-        ("Example Person <contributor@example.org> (@contributor)", true),
+        (
+            "Example Person <contributor@example.org> (@contributor)",
+            true,
+        ),
         (
             "Example Person <123+contributor@users.noreply.github.com> (@contributor)",
             true,
@@ -15,13 +18,22 @@ fn author_entries_match_complete_logins_and_require_name_and_email() -> Result<(
             "Example Person <contributor@users.noreply.github.com> (@contributor)",
             true,
         ),
-        ("  Example Person <dev@example.org> (@CONTRIBUTOR)\r\n", true),
+        (
+            "  Example Person <dev@example.org> (@CONTRIBUTOR)\r\n",
+            true,
+        ),
         (
             "Terms of contribution.\n\nExample Person <dev@example.org> (@contributor)\n",
             true,
         ),
-        ("Other Contributor <dev@example.org> (@other-contributor)", false),
-        ("Example Person <dev@example.org> (@contributor-extra)", false),
+        (
+            "Other Contributor <dev@example.org> (@other-contributor)",
+            false,
+        ),
+        (
+            "Example Person <dev@example.org> (@contributor-extra)",
+            false,
+        ),
         ("Example Person (@contributor)", false),
         ("<dev@example.org> (@contributor)", false),
         ("Example Person <not-an-email> (@contributor)", false),
@@ -60,7 +72,9 @@ fn missing_entry_explains_how_to_acknowledge_the_terms() -> Result<()> {
 fn missing_authors_file_reports_the_path() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("AUTHORS");
-    let error = authors::check(&path, "contributor").unwrap_err().to_string();
+    let error = authors::check(&path, "contributor")
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains(path.to_str().unwrap()));
 
