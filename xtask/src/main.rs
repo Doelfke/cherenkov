@@ -28,6 +28,8 @@ enum Task {
     Docs,
     /// Syntax-check all assembled Metal libraries.
     CheckMetal,
+    /// Check that a GitHub login is listed in AUTHORS.
+    CheckAuthor { login: String },
     /// Write kernels/.clangd so clangd sees each fragment as the assembler does.
     Clangd,
     /// Run explicit live smoke tests (starts its own server).
@@ -251,6 +253,13 @@ fn main() -> Result<()> {
         Task::Readme { directory } => xtask::readme::update(&directory),
         Task::Docs => xtask::docs::build(),
         Task::CheckMetal => check_metal(),
+        Task::CheckAuthor { login } => {
+            xtask::authors::check(&util::root().join("AUTHORS"), &login)?;
+
+            println!("@{login} is listed in AUTHORS.");
+
+            Ok(())
+        }
         Task::Clangd => write_clangd(),
         Task::Smoke {
             kind,
