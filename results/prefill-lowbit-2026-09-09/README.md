@@ -1,36 +1,22 @@
 # Low-bit prefill comparison
 
-[Timings and output checks](summary.md).
+[Timings and output checks](summary.md) cover 36 valid samples comparing Q4
+prefill with per-expert low-bit prefill. Rates exclude loading and conversion.
 
-Each sample ran in a fresh process with an 8,192-token context, an adaptive pool
-and two adaptive drafts. Prefix caching was disabled.
+## Setup
 
-Each sample generated eight tokens to check the prefill-to-decode handoff. The
-suite measures prefill throughput.
+Each sample ran on AC in a fresh process with an 8,192-token context, an
+adaptive pool, and two drafts. Prefix caching and deadline cuts were disabled.
+Each sample generated eight tokens to check the decode handoff. Binary order
+alternated between rounds; no stores were built during measurement.
+Memory was 20.98 GB after prefill scratch release.
 
-The rates exclude loading and conversion. A store build invalidates the sample.
+## Results
 
-Configurations and binary order rotate. Existing OS file caches are not purged.
+Q4 output matched in all six pairs. Q4 computation was unchanged, so its rate
+variation is a control. Low-bit prefill changes output. Long-prompt Q2 gains
+varied from 1.0% to 15.9% across the two pairs; that result is less certain
+than the short-prompt gains.
 
-Low-bit prefill changes output relative to the earlier Q4-prefill
-implementation.
-
-Each table cell has two samples. Long-prompt timings varied across the run; Q2
-paired gains were +1.0% and +15.9%, so its long-prompt gain is less certain than
-the short/medium gains.
-
-Q4 compute is unchanged; its timing differences are control variation, not an
-intended optimization.
-
-All 36 samples were on AC at both checks, built no stores, and reported 20.98 GB
-Metal after prefill scratch release. This is not a transient peak measurement.
-
-The report records binary hashes and the development source commit and diff.
-Archived executable paths refer to the measurement machine. This repository does
-not include those executables or the development history.
-
-Binary hashes, phase timings, source snapshot, and power readings are in
-[report.json](report.json).
-
-Machine-specific model and executable paths in the saved reports have been
-normalized to placeholders. Measurements and generated answers are unchanged.
+[report.json](report.json) contains hashes, timings, power readings, and source
+metadata. Archived executable paths refer to the measurement machine.
