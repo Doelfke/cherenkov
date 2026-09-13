@@ -53,6 +53,8 @@ struct Active<'a> {
     usage: UsageStats,
     config_generation: u64,
     response_bytes: usize,
+    /// Active seconds from prefill start to the first generated token, if any.
+    ttft: Option<f64>,
     /// Tokens and elapsed seconds from the last step, if eligible for pacing.
     last_chunk: Option<(usize, f64)>,
 }
@@ -255,6 +257,7 @@ impl<'a> Worker<'a> {
                 usage: UsageStats::default(),
                 config_generation: pending.job.settings.generation,
                 response_bytes: limits.response_bytes,
+                ttft: None,
                 last_chunk: None,
             });
         }
@@ -399,6 +402,7 @@ impl Active<'_> {
         let decode_tps = decode_tokens as f64 / self.usage.decode_seconds.max(1e-9);
         let prefill_s = self.usage.prefill_seconds;
         let decode_s = self.usage.decode_seconds;
+        let ttft_ms = self.ttft.unwrap_or(0.0) * 1000.0;
         let ctx_pos = gpu.pos;
         let max_ctx = gpu.max_t.max(1);
         let ctx_pct = gpu.context_fullness() * 100.0;
@@ -409,6 +413,7 @@ impl Active<'_> {
         eprintln!(
             "serve {id}: prefill {prompt_tokens} tok in {prefill_s:.2}s ({prefill_tps:.0} tok/s) \
              | decode {decode_tokens} tok in {decode_s:.2}s ({decode_tps:.1} tok/s) \
+             | ttft {ttft_ms:.0} ms \
              | ctx {ctx_pos}/{max_ctx} ({ctx_pct:.0}% full) \
              | kv cache {kv_used_mb:.0}/{kv_total_mb:.0} MB ({kv_pct:.0}% full)",
             id = self.ticket.id,
@@ -520,6 +525,10 @@ impl Active<'_> {
         let elapsed = started.elapsed().as_secs_f64();
         self.usage.decode_seconds += elapsed;
         self.usage.generated_tokens = decoder.tokens.len() as u64;
+
+        if self.ttft.is_none() && !decoder.tokens.is_empty() {
+            self.ttft = Some(self.usage.prefill_seconds + elapsed);
+        }
 
         state.update(|s| s.decode_seconds += elapsed);
 

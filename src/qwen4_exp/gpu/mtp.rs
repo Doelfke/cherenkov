@@ -24,27 +24,46 @@ impl Gpu<'_> {
 
         let t0 = std::time::Instant::now();
         let mut drafts = Vec::with_capacity(chain);
-        let mut token_rows: Vec<u32> = next.to_vec();
-        let mut src_hyper_row = 0usize;
-        let mut first = true;
-        let mut c0 = 0;
 
         if let Some(out) = self.folded_mtp.take() {
             // The trunk step already ran the head over its rows with the
             // trunk's predictions, which are `next` for every accepted row.
+            // The fold's last accepted row supplies the first draft and the
+            // residual that seeds any chained passes.
             self.mtp_len = self.batch_pos + n;
-            src_hyper_row = n - 1;
-            first = false;
-            token_rows = vec![out[n - 1]];
+            let seed = out[n - 1];
 
             if chain > 0 {
-                drafts.push(out[n - 1]);
+                drafts.push(seed);
             }
 
-            c0 = 1;
+            if chain >= 2 {
+                // Batch the remaining chained single-row passes into one
+                // command buffer instead of issuing a separate CB for each:
+                // every pass's token is the previous pass's GPU-side argmax,
+                // so the chain stays on-device with no CPU round trip.
+                let outs = self.mtp_batch_pass(seed, n, chain - 1)?;
+
+                drafts.extend(outs);
+                self.mtp_ms.push(t0.elapsed().as_secs_f64() * 1e3);
+
+                return Ok(drafts);
+            }
+
+            // 0 or 1 draft: the fold alone supplies it; no chained passes.
+            self.mtp_ms.push(t0.elapsed().as_secs_f64() * 1e3);
+
+            return Ok(drafts);
         }
 
-        for c in c0..chain.max(1) {
+        // No fold (prefix warmup or the developer override): run the full
+        // head over `n` rows, then chain single-row passes one at a time
+        // (the chain is short here, so per-pass command buffers are fine).
+        let mut token_rows: Vec<u32> = next.to_vec();
+        let mut src_hyper_row = 0usize;
+        let mut first = true;
+
+        for c in 0..chain.max(1) {
             let rows = if first { n } else { 1 };
             let base_pos = if first {
                 self.batch_pos
@@ -75,6 +94,148 @@ impl Gpu<'_> {
         self.mtp_ms.push(t0.elapsed().as_secs_f64() * 1e3);
 
         Ok(drafts)
+    }
+
+    /// Run `n_passes` chained single-row MTP passes in ONE command buffer,
+    /// replacing the per-pass `mtp_pass` round trips (each its own CB).
+    ///
+    /// Pass 0 seeds from `seed` (written by the caller to
+    /// `scratch.ids[IDS_MTP_IN]` here before commit) and the fold's residual
+    /// at row `n - 1` (`scratch.mtp_hyper[(n - 1) * hh * 4]`). Each later pass
+    /// seeds from the previous pass's argmax (GPU-internal, read from
+    /// `scratch.ids[MTP_CHAIN_TOKENS_BASE + c - 1]`) and from
+    /// `scratch.mtp_hyper[0]` (the previous pass's own residual output, as in
+    /// the per-pass path). Every pass's argmax is written by its `head_b` to
+    /// `scratch.ids[MTP_CHAIN_TOKENS_BASE + c]`.
+    ///
+    /// Every pass still runs its own expert-slot handshake under a distinct
+    /// event `seq`, so `service_block` runs once per pass in GPU order.
+    /// Returns the argmax tokens of all `n_passes` passes.
+    #[allow(clippy::excessive_nesting)]
+    pub(super) fn mtp_batch_pass(
+        &mut self,
+        seed: u32,
+        n: usize,
+        n_passes: usize,
+    ) -> Result<Vec<u32>> {
+        anyhow::ensure!(
+            (1..=MAX_NB - 1).contains(&n_passes),
+            "chained passes must be 1..={}",
+            MAX_NB - 1
+        );
+
+        unsafe {
+            let ids = self.scratch.ids.contents().cast::<u32>().as_ptr();
+
+            ids.add(IDS_MTP_IN).write(seed);
+        }
+
+        self.dispatch_count.set(0);
+
+        // `step_no` is a per-pass LRU sequence (see
+        // `residency::acquire`): each chained pass gets its own so that
+        // pass i+1 evicts only records not touched by pass i, matching the
+        // per-pass `mtp_pass` semantics exactly.
+        let base_seq = self.event_base + 1;
+        self.event_base += 4 * n_passes as u64;
+        let phase_clock = self.phase_clock();
+
+        let cb = self.ctx.queue.commandBuffer().context("command buffer")?;
+        let mut enc = self.phase_encoder(&cb, None, 4 * self.layers.len())?;
+        let slot_row = self.layers.len();
+        let hh = self.p.cfg.hc_hidden();
+
+        // Pass 0 (the first chained pass after the fold) seeds the head's
+        // residual from the fold's own output at row `n - 1` (the last
+        // committed row's position, mirroring `mtp_pass(from_trunk=false,
+        // src_row=n-1)`). Each subsequent pass seeds from row 0, which the
+        // previous pass's `mtp_fold` kernel overwrote with its output.
+        for c in 0..n_passes {
+            let ids_in = if c == 0 {
+                IDS_MTP_IN
+            } else {
+                MTP_CHAIN_TOKENS_BASE + c - 1
+            };
+            let residual_off = if c == 0 { (n - 1) * hh * 4 } else { 0 };
+            let base_pos = self.batch_pos + n + c;
+
+            anyhow::ensure!(base_pos < self.max_t, "context capacity exceeded");
+
+            self.encode_mtp_prelude(
+                &enc,
+                self.mtp.as_ref().context("no MTP head")?,
+                1,
+                ids_in,
+                &self.scratch.mtp_hyper,
+                residual_off,
+            );
+
+            self.encode_block(
+                &cb,
+                &mut enc,
+                &self.mtp.as_ref().context("no MTP head")?.layer,
+                slot_row,
+                base_pos,
+                1,
+                0,
+                &self.scratch.mtp_hyper,
+                None,
+                None,
+                base_seq + 4 * c as u64,
+            )?;
+
+            self.head_b(
+                &enc,
+                &self.mtp.as_ref().context("no MTP head")?.mixer,
+                1,
+                &self.scratch.mtp_hyper,
+                0,
+                Some(&self.scratch.moe_out),
+                &self.scratch.mtp_logits2,
+                MTP_CHAIN_TOKENS_BASE + c,
+            );
+        }
+
+        enc.endEncoding();
+        cb.commit();
+
+        let record_layer = self
+            .mtp
+            .as_ref()
+            .context("no MTP head")?
+            .layer
+            .moe
+            .record_layer;
+        let mut predicted = std::collections::VecDeque::new();
+        let (mut io_s, mut turn_s) = (0.0f64, 0.0f64);
+
+        for c in 0..n_passes {
+            // Mirror the per-pass path: each pass gets a distinct LRU
+            // sequence, so pass i+1 cannot evict records still needed by
+            // pass i (see residency::acquire).
+            self.step_no += 1;
+
+            self.service_block(
+                record_layer,
+                slot_row,
+                1,
+                base_seq + 4 * c as u64,
+                &mut predicted,
+                None,
+                &mut io_s,
+                &mut turn_s,
+            )?;
+        }
+
+        cb.waitUntilCompleted();
+        self.collect_phases(&[(slot_row, record_layer)], phase_clock);
+
+        let ids = self.scratch.ids.contents().cast::<u32>().as_ptr();
+        let outs: Vec<u32> = (0..n_passes)
+            .map(|c| unsafe { ids.add(MTP_CHAIN_TOKENS_BASE + c).read() })
+            .collect();
+
+        Ok(outs)
     }
 
     /// One MTP pass over `rows` rows: hidden input from the trunk's wide

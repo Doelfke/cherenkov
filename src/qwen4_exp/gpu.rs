@@ -75,6 +75,11 @@ const IDS_IN: usize = 0;
 const IDS_OUT: usize = 8;
 const IDS_MTP_IN: usize = 16;
 const IDS_MTP_OUT: usize = 24;
+/// Chained-draft token ring: pass c's argmax (written by its head_b) lands at
+/// ids[32 + c]; the next chained pass's prelude reads ids[32 + c] as its input
+/// token. The first chained input token (the seed) is written by the CPU into
+/// IDS_MTP_IN before the batched command buffer is committed.
+const MTP_CHAIN_TOKENS_BASE: usize = 32;
 
 type Buf = Retained<ProtocolObject<dyn MTLBuffer>>;
 type Pso = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
