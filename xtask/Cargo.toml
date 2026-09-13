@@ -17,5 +17,8 @@ sha2 = "0.11"
 tempfile = "3"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
+[lints.rust]
+dead_code = "deny"
+
 [lints.clippy]
 cognitive_complexity = "warn"
