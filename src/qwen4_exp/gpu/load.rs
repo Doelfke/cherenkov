@@ -70,6 +70,8 @@ impl<'a> Gpu<'a> {
                 ctx.pipeline(&blib, &format!("{base}2"))?,
                 ctx.pipeline(&blib, &format!("{base}3"))?,
                 ctx.pipeline(&blib, &format!("{base}4"))?,
+                ctx.pipeline(&blib, &format!("{base}5"))?,
+                ctx.pipeline(&blib, &format!("{base}6"))?,
             ])
         };
         let expert_qmm = |bits| -> Result<[Pso; 3]> {

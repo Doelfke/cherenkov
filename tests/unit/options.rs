@@ -41,7 +41,7 @@ fn flags_resolve_defaults_and_mixed_precision() {
 fn invalid_numbers_fail_at_the_interface() {
     for (flag, value) in [
         ("--experts", "1"),
-        ("--drafts", "4"),
+        ("--drafts", "6"),
         ("--cut-weak", "NaN"),
         ("--cut-weak", "1.1"),
         ("--pool-gb", "0"),

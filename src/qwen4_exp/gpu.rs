@@ -65,9 +65,9 @@ const ARGMAX_TGS: usize = 1024;
 const ATTN_TB: usize = 512;
 const ATTN_MAX_WG: usize = 256;
 /// Rows per step (prefill chunk, or 1 + drafts when verifying).
-pub const MAX_NB: usize = 4;
+pub const MAX_NB: usize = 6;
 /// Rollback planes: verify batches may have up to this many draft rows.
-pub const MAX_SNAP: usize = 3;
+pub const MAX_SNAP: usize = 5;
 /// Slots per layer row of the expert slot table (last entry = union size).
 const SLOT_STRIDE: usize = 64;
 /// ids buffer layout: trunk inputs, trunk argmax, MTP inputs, MTP argmax.

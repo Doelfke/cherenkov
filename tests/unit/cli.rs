@@ -226,7 +226,7 @@ fn server_rejects_cli_only_options_and_invalid_numbers() {
         vec!["--check"],
         vec!["--repeat", "1"],
         vec!["--experts", "1"],
-        vec!["--drafts", "4"],
+        vec!["--drafts", "6"],
         vec!["--max-ctx", "0"],
         vec!["--max-tokens", "0"],
         vec!["--cut-weak", "NaN"],

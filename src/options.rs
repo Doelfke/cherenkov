@@ -103,8 +103,8 @@ pub struct Options {
     /// Skip late weak experts; nonzero makes output non-reproducible
     #[arg(long, default_value_t = 0.0, hide_default_value = true, value_parser = cut)]
     pub cut_weak: f32,
-    /// Adaptive MTP drafts, 0..3; 0 unloads the draft head
-    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(0..=3))]
+    /// Adaptive MTP drafts, 0..5; 0 unloads the draft head
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(0..=5))]
     pub drafts: u8,
     /// Wired expert pool in decimal GB, or max (default: adaptive)
     #[arg(
@@ -188,7 +188,7 @@ impl Options {
             !self.repack || self.miss_bits() < 4,
             "--repack requires a 2- or 3-bit expert precision"
         );
-        ensure!(self.drafts <= 3, "--drafts must be 0..3");
+        ensure!(self.drafts <= 5, "--drafts must be 0..5");
         ensure!(
             self.cut_weak.is_finite() && (0.0..=1.0).contains(&self.cut_weak),
             "invalid cut weight"

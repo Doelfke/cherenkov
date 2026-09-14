@@ -1,6 +1,6 @@
 // Expert routing, address tables, Q2/Q3 projections, and resident/fetched MoE execution.
 
-#define FN_MAX_NB 4u
+#define FN_MAX_NB 6u
 #define FN_SLOT_STRIDE 64u
 
 // y[b][r] = sum_c w[r][c] * x[b][c], bf16 weights. One simdgroup per (b, r).
@@ -367,6 +367,8 @@ FN_INST_MOE_GATE_UP(1)
 FN_INST_MOE_GATE_UP(2)
 FN_INST_MOE_GATE_UP(3)
 FN_INST_MOE_GATE_UP(4)
+FN_INST_MOE_GATE_UP(5)
+FN_INST_MOE_GATE_UP(6)
 
 // h[u*nb+b][j] = silu(gate) * up, written as half even/odd streams plus
 // per-32 group sums for the down projection. Grid = (n_u+shared)*nb*inter/2
@@ -504,6 +506,8 @@ FN_INST_MOE_DOWN(1)
 FN_INST_MOE_DOWN(2)
 FN_INST_MOE_DOWN(3)
 FN_INST_MOE_DOWN(4)
+FN_INST_MOE_DOWN(5)
+FN_INST_MOE_DOWN(6)
 
 // Part 0: out[b][i] = sum_{u < n_res} wmap[layer][b][u] * y[u*nb+b][i]
 //                   + sigmoid(gate_vec . x[b]) * y[n_u*nb+b][i]

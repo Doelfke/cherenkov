@@ -159,7 +159,7 @@ The default is **4-bit experts with two adaptive speculative drafts**.
 | --- | --- |
 | `--experts 4\|3\|2` | Routed-expert precision in prefill and decode. Lower precision trades accuracy for speed. |
 | `--miss-experts 2` | Fetch new misses at 2-bit in Q4 mode. |
-| `--drafts N` | Speculative drafts, 0–3; `0` disables speculation. |
+| `--drafts N` | Speculative drafts, 0–5; `0` disables speculation. |
 | `--temperature T` | Sampling temperature; default `0` is greedy. Sampling disables MTP verification. |
 | `--top-k K`, `--top-p P`, `--seed N` | Filter and seed sampling; defaults are unfiltered and unseeded. |
 | `--max-tokens N` | Maximum generated tokens; default 64. |

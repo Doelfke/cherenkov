@@ -162,6 +162,8 @@ FN_INST_QMV_SILU(1)
 FN_INST_QMV_SILU(2)
 FN_INST_QMV_SILU(3)
 FN_INST_QMV_SILU(4)
+FN_INST_QMV_SILU(5)
+FN_INST_QMV_SILU(6)
 
 // mixed[b][i] = mean over groups of sigmoid(u[b][g*n+i]) * normed[b][g*n+i]
 kernel void fn_hc_mix_b(

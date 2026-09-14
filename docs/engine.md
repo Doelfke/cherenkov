@@ -32,7 +32,7 @@ unless stated otherwise.
 
 ## Decode and expert IO
 
-A step processes one token and up to three drafts in row-major buffers.
+A step processes one token and up to five drafts in row-major buffers.
 The residual has four hidden-width streams. MoE output may be deferred until
 the next normalization; PLE applies any pending output before its transform.
 

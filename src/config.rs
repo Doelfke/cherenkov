@@ -340,8 +340,8 @@ pub struct Overrides {
     /// Skip late weak experts; nonzero makes output non-reproducible
     #[arg(long, value_parser = cut)]
     pub cut_weak: Option<f32>,
-    /// Adaptive MTP drafts, 0..3 (default: 2); 0 unloads the draft head
-    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=3))]
+    /// Adaptive MTP drafts, 0..5 (default: 2); 0 unloads the draft head
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=5))]
     pub drafts: Option<u8>,
     /// Wired expert pool in decimal GB, or max (default: adaptive)
     #[arg(long, value_name = "N|max|adaptive")]
